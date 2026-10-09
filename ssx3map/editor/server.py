@@ -21,7 +21,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .. import aip as aipmod
 from .. import aip as _aip
-from .. import mapedit, models, painter, rebuild, recipe, ssb, terrain, texture, warp
+from .. import mapdesign, mapedit, models, painter, rebuild, recipe, ssb, terrain, texture, warp
 from ..world import World, resolve_input
 from . import games
 
@@ -398,10 +398,6 @@ class Session:
             except Exception:
                 w.stream.restore(snap)
                 raise
-            over = [c for c in w.stream.changed_chunks() if w.stream.shortfall(c) > 0]
-            if over:
-                w.stream.restore(snap)
-                raise mapedit.EditRefused('the new course does not fit the game data')
             label = f'plain slope {design.grade * 100:.0f} %, {len(jumps)} jumps'
             self._push(label, snap)
             new_line = _aip.course_line(mapedit.course_aip(w, code))
@@ -413,6 +409,32 @@ class Session:
             return dict(message=(f'{label}: {r.used} patches ({r.rows} x {r.cols}), removed {r.sunk} objects, '
                                  f'{r.rails} rails; course {new_line.length / 100:.0f} m, drop {r.drop / 100:.0f} m; '
                                  f'texture chunks {len(r.chunks)}'))
+
+    def design(self, req):
+        """Replace the course by a designed map (mapdesign.DESIGNS) along its route (one undo step)."""
+        w = self.world
+        code = req['code']
+        name = req.get('name') or 'olivers_peak'
+        if name not in mapdesign.DESIGNS:
+            raise mapedit.EditRefused(f'no design {name!r}')
+        with self.lock:
+            surface = mapdesign.DESIGNS[name]()
+            snap = w.stream.snapshot(mapedit.course_chunks(w, code))
+            try:
+                r = rebuild.build_from_surface(w, code, surface)
+            except Exception:
+                w.stream.restore(snap)
+                raise
+            self._push(surface.name, snap)
+            line = _aip.course_line(mapedit.course_aip(w, code))
+            depth = len(self.undo)
+            for m in surface.markers():
+                p, _ = line.at(m['at'][1] * 100.0)
+                self.marks.append((depth, code, dict(x=round(p[0], 1), y=round(p[1], 1), z=None, t=m['name'])))
+            return dict(message=(f'{surface.name}: {r.used} patches ({r.rows} rows x {r.cols})'
+                                 + (f', {r.added} added' if r.added else '')
+                                 + f'; removed {r.sunk} objects, {r.rails} rails; course {line.length / 100:.0f} m, '
+                                 f'drop {r.drop / 100:.0f} m'))
 
     def warp(self, req):
         """Grab the ground at (x, y) and carry it to (tx, ty) (cm), lifted by `lift` and turned by `turn`."""
@@ -583,7 +605,7 @@ class Handler(BaseHTTPRequestHandler):
         if s.world is None:
             return self._send(409, dict(error='najprv otvor hru'))
         routes = {'/api/terrain': lambda: s.terrain(req), '/api/stroke': lambda: s.stroke(req),
-                  '/api/flat': lambda: s.flat(req),
+                  '/api/flat': lambda: s.flat(req), '/api/design': lambda: s.design(req),
                   '/api/warp': lambda: s.warp(req), '/api/recipe': lambda: s.apply_recipe(req),
                   '/api/objects': lambda: s.objects(req),
                   '/api/undo': s.undo_last, '/api/save': lambda: s.save(req['output'])}

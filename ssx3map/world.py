@@ -164,19 +164,42 @@ class World:
 
     # -- saving ---------------------------------------------------------------
     def save(self, output, progress=None):
-        """Write the edited world. Returns the per-block re-encode report."""
+        """Write the edited world. Returns the per-block re-encode report.
+
+        Chunks that kept their size are re-encoded into their own blocks, so nothing moves.
+        When a chunk changed size (records were added) or no longer fits its blocks, the
+        world grows instead (grow.Growth): the chunk takes more blocks, later chunks shift,
+        bam.sdb follows and BAM.BIG may move to the end of the disc."""
         if os.path.abspath(output) == os.path.abspath(self.source):
             raise ValueError('refusing to overwrite the input; choose another output path')
-        image, report = self.stream.build(progress=progress)
-        if progress:
-            progress('verifying the re-encoded chunks')
-        self.stream.verify(image)
-        self.big.replace(self.ssb_entry, image)
-        payload = self.big.to_bytes()
+        changed = self.stream.changed_chunks()
+        resized = [c for c in changed if len(self.stream.current(c)) != self.stream.chunks[c].decoded_size]
+        payload = None
+        if not resized:
+            try:
+                image, report = self.stream.build(progress=progress)
+            except ssb.StreamError as e:
+                if progress:
+                    progress(f'{e}; growing the world data instead')
+            else:
+                if progress:
+                    progress('verifying the re-encoded chunks')
+                self.stream.verify(image)
+                big = bigf.BigArchive.parse(self.big.to_bytes())
+                big.replace(big.find_suffix('.ssb'), image)
+                payload = big.to_bytes()
+        if payload is None:
+            from . import grow
+            if progress:
+                progress(f'packing {len(changed)} changed chunks into new blocks (the world data grows)')
+            g = grow.Growth(self)
+            g.take_edits()
+            payload = g.build()
+            report = [dict(chunk=c, method='grow') for c in sorted(g.blocks) for _ in g.blocks[c]]
         if progress:
             progress(f'writing {output}')
         if self.is_iso:
-            iso9660.replace_file(self.source, BIG_PATH, payload, output_path=output)
+            iso9660.store_file(self.source, BIG_PATH, payload, output)
         else:
             with open(output, 'wb') as f:
                 f.write(payload)

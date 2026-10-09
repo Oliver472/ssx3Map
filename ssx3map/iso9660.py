@@ -140,8 +140,23 @@ def list_files(image_path):
     return sorted(out, key=lambda e: e[1])
 
 
-def relocate_file(image_path, inner_path, payload, output_path, clear_old=True):
-    """Copy the image to `output_path` with `inner_path` replaced by `payload` at the end of the disc.
+def store_file(image_path, inner_path, payload, output_path):
+    """Write `payload` as `inner_path` into a copy of the image, whatever its size: in its own
+    sectors when it fits, else where it is when it is the last file on the disc, else moved to
+    the end of the disc. Returns how ('in place', 'extended' or 'moved')."""
+    entry = find(image_path, inner_path)
+    allocated = (entry.size + SECTOR - 1) // SECTOR * SECTOR
+    if len(payload) <= allocated:
+        replace_file(image_path, inner_path, payload, output_path=output_path)
+        return 'in place'
+    last = entry.offset + allocated >= os.path.getsize(image_path)
+    relocate_file(image_path, inner_path, payload, output_path, at_end=not last)
+    return 'moved' if not last else 'extended'
+
+
+def relocate_file(image_path, inner_path, payload, output_path, clear_old=True, at_end=True):
+    """Copy the image to `output_path` with `inner_path` replaced by `payload` at the end of the disc
+    (or, with at_end=False, where it is, for the last file on the disc).
 
     The old sectors are zeroed (clear_old), so a game that still read them would
     fail at once instead of quietly using the old file."""
@@ -151,7 +166,8 @@ def relocate_file(image_path, inner_path, payload, output_path, clear_old=True):
     shutil.copyfile(image_path, output_path)
     with open(output_path, 'r+b') as f:
         f.seek(0, os.SEEK_END)
-        lba = (f.tell() + SECTOR - 1) // SECTOR
+        lba = (f.tell() + SECTOR - 1) // SECTOR if at_end else entry.lba
+        clear_old = clear_old and at_end
         f.seek(lba * SECTOR)
         f.write(payload)
         f.write(bytes(-len(payload) % SECTOR))

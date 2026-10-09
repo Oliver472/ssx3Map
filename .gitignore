@@ -10,3 +10,4 @@ report*.txt
 report*.json
 __pycache__/
 *.pyc
+*.blend1

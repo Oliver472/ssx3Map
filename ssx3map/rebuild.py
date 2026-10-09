@@ -19,6 +19,7 @@ patch's slope towards the sun, so ramps and walls stay visible.
 from __future__ import annotations
 
 import bisect
+import heapq
 import math
 import struct
 from dataclasses import dataclass, field
@@ -56,6 +57,7 @@ class Design:
 class Report:
     slots: int = 0
     used: int = 0
+    added: int = 0              # patch records added to the location (the world grows)
     rows: int = 0
     cols: int = 0
     fine: float = 0.0
@@ -262,6 +264,8 @@ class Piste:
         self.s_start, self.z_start = s_start, z_start
         self.half = design.width * 50.0
         self.bank = design.bank * 100.0
+        self.half_total = self.half + self.bank
+        self.lane = self.half - 300.0           # where the race data may go across the piste
         self.jumps = []
         for metres, height in design.jumps:
             self.jumps.append((s_start + metres * 100.0, height * 100.0))
@@ -295,6 +299,40 @@ class Piste:
 
     def plain(self, s, l):
         return self.base(s) + self.wall(l)
+
+    def columns(self):
+        return [-self.half_total, -self.half, 0.0, self.half, self.half_total]
+
+    def breaks(self, length, rows_budget, slots):
+        """Row boundaries along the course: short around jumps, the rest of the budget spread
+        over the plain parts. Returns (breaks, fine, coarse) in cm."""
+        zones = [(max(0.0, a), min(length, b)) for a, b in self.zones()]
+        zones = [(a, b) for a, b in zones if b > a]
+        fine = self.d.fine * 100.0
+        fine_len = sum(b - a for a, b in zones)
+        plain_len = length - fine_len
+        pieces = len(zones) + 1                    # plain stretches between the zones
+        while True:
+            fine_rows = sum(max(1, math.ceil((b - a) / fine)) for a, b in zones)
+            left = rows_budget - fine_rows - pieces  # every stretch may round up by one row
+            if left > 0 and plain_len / left <= 4000.0:
+                break
+            fine *= 1.25
+            if fine > 1500.0:
+                raise mapedit.EditRefused(f'{slots} patches are too few for a {length / 100:.0f} m piste')
+        coarse = max(fine, plain_len / left) if plain_len > 0 else fine
+        breaks = [0.0]
+        pos = 0.0
+        for a, b in zones + [(length, length)]:
+            if a > pos:
+                n = max(1, math.ceil((a - pos) / coarse))
+                breaks += [pos + (a - pos) * i / n for i in range(1, n + 1)]
+                pos = a
+            if b > pos:
+                n = max(1, math.ceil((b - pos) / fine))
+                breaks += [pos + (b - pos) * i / n for i in range(1, n + 1)]
+                pos = b
+        return breaks, fine, coarse
 
     def zones(self):
         """[(s0, s1)] that need short patches (around jumps and landings)."""
@@ -347,6 +385,130 @@ class CourseMap:
     def yaw(self, x, y):
         s, _ = self.route.locate(x, y)
         return self.route.heading(s) - self.route.heading(s, new=False)
+
+
+class SurfaceGround:
+    """The new ground from a height surface in the straight course frame: `surface(x, y)` is the
+    height in metres above the start, x metres to the right of the course and y metres after
+    the start (None where it has none, then the centre line's height is used). The route bends
+    the straight frame along the race line.
+
+    Rows follow the surface: a row whose bicubic cannot follow it closely is cut in two, until
+    the patch budget is spent or every row is within `tolerance` metres."""
+
+    def __init__(self, surface, route, s_start, z_start, half, cols=6, lane=12.0, tolerance=0.05):
+        self.surface = surface
+        self.route, self.s_start, self.z_start = route, s_start, z_start
+        self.half_total = half * 100.0
+        self.cols = cols                        # a number of equal columns, or their edges (x, m)
+        self.lane = lane * 100.0
+        self.tolerance = tolerance * 100.0
+        self.step = 200.0
+        n = int(route.length / self.step) + 2
+        prof = [surface(0.0, (k * self.step - s_start) / 100.0) for k in range(n)]
+        known = [k for k, h in enumerate(prof) if h is not None]
+        if not known:
+            raise mapedit.EditRefused('the surface has no height along the race line')
+        first, last = known[0], known[-1]
+        back = known[max(0, len(known) - 10)]
+        slope = (prof[last] - prof[back]) / (last - back) if last > back else 0.0
+        for k in range(n):
+            if k < first:
+                prof[k] = prof[first]
+            elif k > last:
+                prof[k] = prof[last] + slope * (k - last)
+            elif prof[k] is None:
+                a = max(j for j in known if j < k)
+                b = min(j for j in known if j > k)
+                prof[k] = prof[a] + (prof[b] - prof[a]) * (k - a) / (b - a)
+        self.centre = prof
+        w = 20                                  # +-40 m: the slope without its features (for the light)
+        self.smooth = [sum(prof[max(0, k - w):k + w + 1]) / len(prof[max(0, k - w):k + w + 1])
+                       for k in range(n)]
+        self.cache = {}
+
+    def _profile(self, values, s):
+        f = min(max(s / self.step, 0.0), len(values) - 1.0)
+        i = min(int(f), len(values) - 2)
+        return values[i] + (values[i + 1] - values[i]) * (f - i)
+
+    def height(self, s, l):
+        """Metres above the start at (s, l)."""
+        key = (round(s, 1), round(l, 1))
+        h = self.cache.get(key)
+        if h is None:
+            h = self.surface(-l / 100.0, (s - self.s_start) / 100.0)
+            if h is None:
+                h = self._profile(self.centre, s)
+            self.cache[key] = h
+        return h
+
+    def z(self, s, l):
+        return self.z_start + 100.0 * self.height(s, l)
+
+    def base(self, s):
+        return self.z_start + 100.0 * self._profile(self.smooth, s)
+
+    def plain(self, s, l):
+        return self.base(s)
+
+    def columns(self):
+        if isinstance(self.cols, int):
+            return [-self.half_total + 2 * self.half_total * k / self.cols for k in range(self.cols + 1)]
+        return sorted(-x * 100.0 for x in self.cols)
+
+    def breaks(self, length, rows_budget, slots, min_row=300.0, max_row=4000.0, step=100.0):
+        """Row boundaries (cm): rows are cut where the surface needs it most. Returns (breaks,
+        shortest, longest)."""
+        if rows_budget < 2:
+            raise mapedit.EditRefused(f'{slots} patches are too few for this surface')
+        max_row = max(max_row, length / rows_budget * 1.5)
+        ss = [min(k * step, length) for k in range(int(length // step) + 1)]
+        if ss[-1] < length:
+            ss.append(length)
+        cols = self.columns()
+        ls = sorted(set(cols + [(a + b) / 2 for a, b in zip(cols, cols[1:])]))
+        grid = [[self.z(s_, l) for l in ls] for s_ in ss]
+
+        def at(p, j):
+            i = min(int(p), len(ss) - 2)
+            return grid[i][j] + (grid[i + 1][j] - grid[i][j]) * (p - i)
+
+        def error(a, b):
+            """Largest distance between the surface and a cubic through 4 samples of the row."""
+            if b - a < 3:
+                return 0.0
+            worst = 0.0
+            for j in range(len(ls)):
+                y0, y1, y2, y3 = (at(a + (b - a) * i / 3, j) for i in range(4))
+                for k in range(a, b + 1):
+                    t = 3.0 * (k - a) / (b - a)
+                    v = (-y0 * (t - 1) * (t - 2) * (t - 3) / 6 + y1 * t * (t - 2) * (t - 3) / 2
+                         - y2 * t * (t - 1) * (t - 3) / 2 + y3 * t * (t - 1) * (t - 2) / 6)
+                    worst = max(worst, abs(v - grid[k][j]))
+            return worst
+
+        last = len(ss) - 1
+        n0 = max(1, math.ceil(length / max_row))
+        cuts = sorted({round(last * i / n0) for i in range(n0 + 1)})
+        heap = [(-error(a, b), a, b) for a, b in zip(cuts, cuts[1:])]
+        heapq.heapify(heap)
+        done = []
+        while heap and len(heap) + len(done) < rows_budget:
+            e, a, b = heapq.heappop(heap)
+            if -e <= self.tolerance:
+                done.append((a, b))
+                break
+            if ss[b] - ss[a] < 2 * min_row:
+                done.append((a, b))
+                continue
+            m = (a + b) // 2
+            heapq.heappush(heap, (-error(a, m), a, m))
+            heapq.heappush(heap, (-error(m, b), m, b))
+        rows = sorted(done + [(a, b) for _, a, b in heap])
+        breaks = [ss[rows[0][0]]] + [ss[b] for _, b in rows]
+        lengths = [b - a for a, b in zip(breaks, breaks[1:])]
+        return breaks, min(lengths), max(lengths)
 
 
 class Shift:
@@ -465,6 +627,22 @@ def default_jumps(length_m):
 def flatten_course(world, code, design=None, log=None):
     """Replace the course `code` by a plain slope with jumps (see the module doc). Returns a Report."""
     design = design or Design()
+
+    def piste(route, s_start, z_start, line):
+        if design.jumps is None:
+            design.jumps = default_jumps(line.length / 100.0)
+        return Piste(route, design, s_start, z_start)
+    report = rebuild_course(world, code, piste, design.width * 50.0 + design.bank * 100.0, log=log)
+    report.jumps = list(design.jumps)
+    return report
+
+
+def rebuild_course(world, code, make_ground, half_total, log=None, extra=0):
+    """Replace the terrain of course `code` by the ground `make_ground(route, s_start, z_start,
+    line)` returns (a Piste or a SurfaceGround) on a band `half_total` cm to each side of the
+    smoothed race line, and carry the race data onto it (see the module doc).
+
+    `extra` patch records may be added to the location (the world then grows when saved)."""
     report = Report()
     locs = mapedit.course_locations(world, code)
     loc = locs[0]
@@ -474,8 +652,6 @@ def flatten_course(world, code, design=None, log=None):
         raise mapedit.EditRefused(f'{code} has no race line')
     line = aipmod.course_line(course)
     report.length_old = line.length
-    if design.jumps is None:
-        design.jumps = default_jumps(line.length / 100.0)
 
     # Old ground (all of the course's locations), before anything changes.
     old_patches = [p for _, _, p in mapedit.patches(world, locs)]
@@ -489,7 +665,6 @@ def flatten_course(world, code, design=None, log=None):
 
     # The route and the new ground.
     route = Route(line.points)
-    half_total = design.width * 50.0 + design.bank * 100.0
     report.smoothing = route.smooth(half_total)
     route.prepare()
     report.shift = max(math.dist(a, b) for a, b in zip(route.old, route.new))
@@ -503,8 +678,7 @@ def flatten_course(world, code, design=None, log=None):
             z_start = grid.position[2]
     if z_start is None:
         z_start = line.at(0.0)[0][2]
-    piste = Piste(route, design, s_start, z_start)
-    report.jumps = list(design.jumps)
+    piste = make_ground(route, s_start, z_start, line)
     report.drop = piste.base(s_start) - piste.base(route.length)
 
     # Look and streaming of the old piste. The game draws a patch only while its texture chunk
@@ -579,43 +753,21 @@ def flatten_course(world, code, design=None, log=None):
         best = min((i for i in (k - 1, k) if 0 <= i < len(near)), key=lambda i: abs(near_s[i] - s_))
         return near[best][1]
 
-    # Rows along the course: short around jumps, the rest of the budget spread over the plain parts.
-    cols = [-half_total, -design.width * 50.0, 0.0, design.width * 50.0, half_total]
+    # Rows along the course, as the ground wants them.
+    cols = piste.columns()
     ncols = len(cols) - 1
-    rows_budget = len(slots) // ncols
-    zones = [(max(0.0, a), min(route.length, b)) for a, b in piste.zones()]
-    zones = [(a, b) for a, b in zones if b > a]
-    fine = design.fine * 100.0
-    fine_len = sum(b - a for a, b in zones)
-    plain_len = route.length - fine_len
-    pieces = len(zones) + 1                    # plain stretches between the zones
-    while True:
-        fine_rows = sum(max(1, math.ceil((b - a) / fine)) for a, b in zones)
-        left = rows_budget - fine_rows - pieces  # every stretch may round up by one row
-        if left > 0 and plain_len / left <= 4000.0:
-            break
-        fine *= 1.25
-        if fine > 1500.0:
-            raise mapedit.EditRefused(f'{len(slots)} patches are too few for a {route.length / 100:.0f} m piste')
-    coarse = max(fine, plain_len / left) if plain_len > 0 else fine
-    breaks = [0.0]
-    pos = 0.0
-    for a, b in zones + [(route.length, route.length)]:
-        if a > pos:
-            n = max(1, math.ceil((a - pos) / coarse))
-            breaks += [pos + (a - pos) * i / n for i in range(1, n + 1)]
-            pos = a
-        if b > pos:
-            n = max(1, math.ceil((b - pos) / fine))
-            breaks += [pos + (b - pos) * i / n for i in range(1, n + 1)]
-            pos = b
+    rows_budget = (len(slots) + extra) // ncols
+    breaks, fine, coarse = piste.breaks(route.length, rows_budget, len(slots) + extra)
     report.rows, report.cols, report.fine, report.coarse = len(breaks) - 1, ncols, fine, coarse
-    if report.rows * ncols > len(slots):
+    if report.rows * ncols > len(slots) + extra:
         raise mapedit.EditRefused('internal: more patches than slots')
 
     # Slots in order along the course, new patches likewise: neighbours stay in the same block.
+    # Added patches (records that do not exist yet) come last: the end of the course.
     order = sorted(slots, key=lambda rp: route.locate(*rp[1].point(0.5, 0.5)[:2])[0])
+    order += [(None, order[-1][1])] * max(0, report.rows * ncols - len(slots))
     buf = world.stream.chunk(main)
+    added = []
     used = 0
     for r in range(report.rows):
         s0, s1 = breaks[r], breaks[r + 1]
@@ -623,6 +775,11 @@ def flatten_course(world, code, design=None, log=None):
             l0, l1 = cols[c], cols[c + 1]
             rec, old = order[used]
             used += 1
+            if rec is None:
+                target, off = bytearray(old.data), 0
+                added.append(target)
+            else:
+                target, off = buf, rec.offset
 
             def at(u, v, s0=s0, s1=s1, l0=l0, l1=l1):
                 if not along_u:
@@ -630,8 +787,7 @@ def flatten_course(world, code, design=None, log=None):
                 s, l = s0 + (s1 - s0) * u, l0 + (l1 - l0) * v
                 x, y = route.point(s, l)
                 return x, y, piste.z(s, l)
-            off = rec.offset
-            new = write_patch(buf, off, _fit_patch(at), _corner_order(old))
+            new = write_patch(target, off, _fit_patch(at), _corner_order(old))
             ref = reference((s0 + s1) / 2)
             chunk, = struct.unpack_from('<h', ref.data, TEXTURE_CHUNK)
             use_tex = tex if tex in chunk_textures.get(chunk, ()) else ref.texture
@@ -642,17 +798,17 @@ def flatten_course(world, code, design=None, log=None):
                 u, v = (pu, pv) if along_u else (pv, pu)
                 s, l = s0 + (s1 - s0) * u, l0 + (l1 - l0) * v
                 uvs += [s * k, l * k]
-            struct.pack_into('<8f', buf, off + UVS, *uvs)
+            struct.pack_into('<8f', target, off + UVS, *uvs)
             # surface, flags, layer types (+0x08..+0x0F), streaming track and chunk (+0x155, +0x156)
             # and the extra layer's texture (+0x1A4) as on the old piste here; collidable
-            buf[off + 0x08:off + 0x10] = ref.data[0x08:0x10]
-            buf[off + 0x155:off + 0x158] = ref.data[0x155:0x158]
-            buf[off + 0x1A4:off + 0x1A6] = ref.data[0x1A4:0x1A6]
-            struct.pack_into('<h', buf, off + TEXTURE, use_tex)
-            flags, = struct.unpack_from('<h', buf, off + FLAGS)
-            struct.pack_into('<h', buf, off + FLAGS, flags | 1)
+            target[off + 0x08:off + 0x10] = ref.data[0x08:0x10]
+            target[off + 0x155:off + 0x158] = ref.data[0x155:0x158]
+            target[off + 0x1A4:off + 0x1A6] = ref.data[0x1A4:0x1A6]
+            struct.pack_into('<h', target, off + TEXTURE, use_tex)
+            flags, = struct.unpack_from('<h', target, off + FLAGS)
+            struct.pack_into('<h', target, off + FLAGS, flags | 1)
             report.chunks[chunk] = report.chunks.get(chunk, 0) + 1
-            layer, = struct.unpack_from('<H', buf, off + 0x0C)
+            layer, = struct.unpack_from('<H', target, off + 0x0C)
             report.layers[layer] = report.layers.get(layer, 0) + 1
             # light: a texel of this place's light page as bright as the slope towards the sun asks for
             sm, lm = (s0 + s1) / 2, (l0 + l1) / 2
@@ -673,14 +829,16 @@ def flatten_course(world, code, design=None, log=None):
             texel = pools[page].nearest(b_ref * max(0.5, min(1.3, ratio))) if page in pools else None
             if texel is not None:
                 _, page, u, v = texel
-                struct.pack_into('<4f', buf, off + LIGHT_RECT, u, v, 1e-5, 1e-5)
+                struct.pack_into('<4f', target, off + LIGHT_RECT, u, v, 1e-5, 1e-5)
             else:
-                buf[off + LIGHT_RECT:off + LIGHT_RECT + 16] = ref.data[LIGHT_RECT:LIGHT_RECT + 16]
-            struct.pack_into('<h', buf, off + LIGHT_PAGE, page)
+                target[off + LIGHT_RECT:off + LIGHT_RECT + 16] = ref.data[LIGHT_RECT:LIGHT_RECT + 16]
+            struct.pack_into('<h', target, off + LIGHT_PAGE, page)
     report.used = used
     # Leftover slots: 10 cm patches 1 km under the start, not collidable.
     far = (*route.point(s_start, 0.0), z_start + mapedit.SINK)
     for rec, old in order[used:]:
+        if rec is None:
+            continue
         def tiny(u, v):
             return far[0] + 10 * u, far[1] + 10 * v, far[2]
         write_patch(buf, rec.offset, _fit_patch(tiny), _corner_order(old))
@@ -688,8 +846,7 @@ def flatten_course(world, code, design=None, log=None):
         struct.pack_into('<h', buf, rec.offset + FLAGS, flags & ~1)
 
     # Everything else in the location.
-    lmax = design.width * 50.0 - 300.0
-    cmap = CourseMap(route, piste, index.z, lmax)
+    cmap = CourseMap(route, piste, index.z, piste.lane)
     sink = Shift((0.0, 0.0, mapedit.SINK))
     original = world.stream.chunk_original(main)
     stretch = warp.Stretch(line.points, cmap)
@@ -740,7 +897,45 @@ def flatten_course(world, code, design=None, log=None):
             report.gates += warp.warp_spine(buf, rec.offset, cmap, stretch)
         elif kind in warp.UNTOUCHED and rec.size and warp.UNTOUCHED[kind] not in report.untouched:
             report.untouched.append(warp.UNTOUCHED[kind])
+    # The added patches go in after the location's last terrain record, with the next free rids.
+    if added:
+        track = max({r.track for r, _ in slots}, key=lambda t: sum(1 for r, _ in slots if r.track == t))
+        rid = max(r.rid for r, _ in slots if r.track == track) + 1
+        word = all(struct.unpack_from('<I', p.data, terrain.RESOURCE)[0] == (r.rid << 8) | r.track
+                   for r, p in slots)
+        blob = bytearray()
+        for k, data in enumerate(added):
+            if word:
+                struct.pack_into('<I', data, terrain.RESOURCE, ((rid + k) << 8) | track)
+            blob += (bytes([1]) + len(data).to_bytes(3, 'little') + bytes([track])
+                     + (rid + k).to_bytes(3, 'little') + data)
+        last = [r for r in world.stream.records(main) if r.kind == 1][-1]
+        at = last.offset + last.size
+        buf[at:at] = blob
+        report.added = len(added)
     if log:
-        log(f'new course: {report.rows} x {report.cols} patches of {report.slots}, patch length '
+        log(f'new course: {report.rows} x {report.cols} patches ({report.slots} there were'
+            + (f', {report.added} added' if report.added else '') + f'), patch length '
             f'{report.fine / 100:.0f}..{report.coarse / 100:.0f} m')
     return report
+
+
+MAX_EXTRA = 0.5          # patches a location took more in PCSX2 (probe test 5; +100 % failed)
+
+
+def build_from_surface(world, code, surface, width=120.0, cols=None, extra=0.4, lane=12.0, log=None):
+    """Replace course `code` by the ground of `surface` (see SurfaceGround) on a band `width`
+    metres wide; up to `extra` x the location's patches may be added. A surface with
+    `fit_length(metres)` (a designed course) is laid out over the course's length first, and
+    its `COLUMNS` (x edges, m) are used unless `cols` is given. Returns a Report."""
+    if not 0 <= extra <= MAX_EXTRA:
+        raise mapedit.EditRefused(f'extra patches: at most {MAX_EXTRA:.0%} were tried in the game')
+    main = mapedit.main_chunk(world.location(code))
+    slots = sum(1 for r in world.stream.records(main) if r.kind == 1 and r.size == PATCH_SIZE)
+    cols = cols or getattr(surface, 'columns', None) or 6
+
+    def ground(route, s_start, z_start, line):
+        if hasattr(surface, 'fit_length'):
+            surface.fit_length((route.length - s_start) / 100.0)
+        return SurfaceGround(surface, route, s_start, z_start, width / 2, cols, lane)
+    return rebuild_course(world, code, ground, width * 50.0, log=log, extra=int(slots * extra))

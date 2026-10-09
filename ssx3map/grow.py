@@ -32,6 +32,7 @@ COUNTED_KINDS = 13      # the sub-chunk info counts record kinds 0..12
 SHORTS = 32             # the 28 shorts of a location record start here
 DVD5 = 2295104 * iso9660.SECTOR
 ALIGN = {1: 16, 2: 16, 3: 16, 11: 16, 12: 16, 9: 128, 10: 128}
+SIZE_RULE = 'kinds 0-12, 8-byte headers'     # holds for all 159 retail chunks (docs/findings.md)
 
 
 class GrowError(ValueError):
@@ -265,9 +266,21 @@ class Growth:
         self.notes.append(f'chunk {chunk}: {len(old)} -> {len(data)} bytes, {len(ch.blocks)} -> '
                           f'{len(self.blocks[chunk])} blocks ({keep} kept as they were)')
 
-    def add_records(self, chunk, records, size_rule=None, workers=None):
+    def take_edits(self, workers=None, size_rule=SIZE_RULE):
+        """Pack every edited chunk of the world again (it may have grown); counts follow."""
+        for c in self.stream.changed_chunks():
+            if c in self.blocks:
+                continue
+            old = ssb.parse_records(self.stream.chunk_original(c))
+            data = bytes(self.stream.current(c))
+            new = ssb.parse_records(data)
+            self.set_chunk(c, data, workers)
+            if [(r.kind, r.size) for r in old] != [(r.kind, r.size) for r in new]:
+                self._recount(c, old, new, size_rule)
+
+    def add_records(self, chunk, records, size_rule=SIZE_RULE, workers=None):
         """Insert raw records (headers included) after the last record of their kind; counts follow."""
-        old = self.stream.chunk_original(chunk)
+        old = bytes(self.stream.current(chunk))
         old_recs = ssb.parse_records(old)
         groups = {}
         for raw in records:

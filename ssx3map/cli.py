@@ -42,7 +42,11 @@ def _save(args, w):
         return
     t = time.time()
     report = w.save(args.output, progress=(lambda m: print('  ' + m, file=sys.stderr)) if args.verbose else None)
-    padded = sum(1 for r in report if r['used_padding'])
+    if any(r.get('method') == 'grow' for r in report):
+        print(f'wrote {args.output}: {len(changed)} chunks packed into {len(report)} new blocks '
+              f'({time.time() - t:.1f}s); the world data grew, bam.sdb follows, all chunks verified')
+        return
+    padded = sum(1 for r in report if r.get('used_padding'))
     print(f'wrote {args.output}: {len(changed)} chunks, {len(report)} blocks re-encoded'
           f'{f", {padded} using block padding" if padded else ""} ({time.time() - t:.1f}s); '
           'block layout identical to the original, all changed chunks verified')
@@ -359,11 +363,6 @@ def cmd_flat(args):
           + (f'; not moved: {", ".join(r.untouched)}' if r.untouched else ''))
     line = aipmod.course_line(mapedit.course_aip(w, code))
     print(f'  course after the rebuild: {line.length / 100:.0f} m ({time.time() - t:.0f} s)')
-    for c in w.stream.changed_chunks():
-        short = w.stream.shortfall(c)
-        if short > 0:
-            raise SystemExit(f'error: the new course does not fit the game data (chunk {c}, ~{short} bytes); '
-                             'nothing written')
     if args.map:
         with open(args.map, 'w', encoding='utf-8') as f:
             f.write(mapedit.svg_map(w, code))
@@ -371,6 +370,55 @@ def cmd_flat(args):
     print(f'saving {args.output} (a few minutes)…', flush=True)
     args.verbose = True
     _save(args, w)
+
+
+def cmd_import(args):
+    """Build a course from a designed map: a built-in design or a .glb/.gltf file (course frame)."""
+    from . import gltf, mapdesign
+    w = _open(args.input)
+    _check_output(args, w)
+    code = args.location
+    if args.map in mapdesign.DESIGNS:
+        surface = mapdesign.DESIGNS[args.map]()
+        label = surface.name
+    else:
+        try:
+            surface = gltf.load_surface(args.map)
+        except (OSError, gltf.GltfError) as e:
+            raise SystemExit(f'error: {e}')
+        label = f'{os.path.basename(args.map)} ({surface.count} triangles, {surface.hi[1] - surface.lo[1]:.0f} m long)'
+    print(f'{code}: replacing the course by {label}; band {args.width:.0f} m wide')
+    t = time.time()
+    try:
+        r = rebuild.build_from_surface(w, code, surface, width=args.width, extra=args.extra / 100.0, log=print)
+    except mapedit.EditRefused as e:
+        raise SystemExit(f'error: {e}; nothing written')
+    print(f'  patches: {r.used} in {r.rows} rows x {r.cols} columns, {r.fine / 100:.0f}..{r.coarse / 100:.0f} m long'
+          + (f'; {r.added} added to the {r.slots} the course had' if r.added else f' of {r.slots}'))
+    print(f'  route smoothed (at most {r.shift / 100:.0f} m from the old one), drop {r.drop / 100:.0f} m')
+    print(f'  removed: {r.sunk} objects, {r.rails} rails, {r.lights} lights, {r.particles} particles; '
+          f'on the new course: AI/race paths {r.paths}, start/reset points {r.points}, progress meter {r.gates}, '
+          f'cameras {r.cameras}' + (f'; not moved: {", ".join(r.untouched)}' if r.untouched else ''))
+    line = aipmod.course_line(mapedit.course_aip(w, code))
+    print(f'  course: {line.length / 100:.0f} m ({time.time() - t:.0f} s)')
+    if args.map_svg:
+        with open(args.map_svg, 'w', encoding='utf-8') as f:
+            f.write(mapedit.svg_map(w, code))
+        print(f'map: {args.map_svg}')
+    print(f'saving {args.output} (a few minutes)…', flush=True)
+    args.verbose = True
+    _save(args, w)
+
+
+def cmd_design(args):
+    """Write a built-in designed map as a .glb for Blender."""
+    from . import mapdesign
+    if args.name not in mapdesign.DESIGNS:
+        raise SystemExit(f'error: no design {args.name!r}; built in: {", ".join(mapdesign.DESIGNS)}')
+    out = args.output or f'{args.name}.glb'
+    d = mapdesign.write(out, mapdesign.DESIGNS[args.name](args.length))
+    print(f'wrote {out}: {d.name}, {d.length:.0f} m. In Blender: File > Import > glTF 2.0. '
+          'y = metres after the start, x = metres to the right, z = metres above the start.')
 
 
 def cmd_objects(args):
@@ -562,6 +610,23 @@ def main(argv=None):
     sp.add_argument('--force', action='store_true', help='also touch start/trigger/reset helpers')
     sp.add_argument('-o', '--output', help='output .iso or .BIG')
     sp.add_argument('-v', '--verbose', action='store_true')
+
+    sp = add('import', cmd_import, 'replace a course by a designed map (built in, or a .glb from Blender)')
+    sp.add_argument('map', help='olivers_peak (built in) or a .glb/.gltf file in the course frame '
+                                '(y metres after the start, x metres to the right, z metres above the start)')
+    sp.add_argument('--location', default='ARA1', help='course code (default ARA1, Snow Jam)')
+    sp.add_argument('--width', type=float, default=120.0, help='width of the band built along the course, m')
+    sp.add_argument('--extra', type=float, default=40.0, help='%% more terrain patches allowed (at most 50)')
+    sp.add_argument('--map-svg', help='also draw the new course from above as SVG')
+    sp.add_argument('-o', '--output', required=True, help='output .iso or .BIG')
+    sp.add_argument('-v', '--verbose', action='store_true')
+
+    sp = sub.add_parser('design', help='write a built-in designed map as a .glb for Blender',
+                        description='write a built-in designed map as a .glb for Blender')
+    sp.set_defaults(fn=cmd_design)
+    sp.add_argument('name', nargs='?', default='olivers_peak', help='the design (default olivers_peak)')
+    sp.add_argument('--length', type=float, default=4930.0, help='course length, m (default: Snow Jam)')
+    sp.add_argument('-o', '--output', help='output .glb (default NAME.glb)')
 
     sp = sub.add_parser('probe', help='write test images that grow the world data, one step each (try them in PCSX2)',
                         description='write test images that grow the world data, one step each, and a report; '

@@ -639,8 +639,24 @@ function showMarks(course) {
 
 function syncRecipeFields() {
   const flat = $('recipe').value === '__flat__';
+  const built = flat || $('recipe').value === '__peak__';
   $('flatParams').classList.toggle('hidden', !flat);
-  $('recipeNoWarpLabel').classList.toggle('hidden', flat);
+  $('recipeNoWarpLabel').classList.toggle('hidden', built);
+}
+
+async function applyDesign(name) {
+  if (!confirm(`Wipe the course ${state.course ? state.course.name : ''} and build Oliver's Peak on its route? `
+    + '(Undo brings it back.)')) return;
+  busy(true, "building Oliver's Peak…");
+  try {
+    const res = await api('/api/design', { code: state.code, name });
+    log(res.message, 'ok');
+    await loadCourse(state.code, false);
+  } catch (e) {
+    log(e.message, 'err');
+  } finally {
+    busy(false);
+  }
 }
 
 async function applyFlat() {
@@ -662,6 +678,7 @@ async function applyRecipe() {
   const name = $('recipe').value;
   if (!name) return;
   if (name === '__flat__') return applyFlat();
+  if (name === '__peak__') return applyDesign('olivers_peak');
   busy(true, 'building the course from the recipe… (checking the space in the game data takes a few minutes)');
   try {
     const res = await api('/api/recipe', { name, skip: $('recipeNoWarp').checked ? ['warp'] : [] });
@@ -1176,7 +1193,7 @@ async function undo() {
 }
 
 async function save() {
-  busy(true, 'saving the edited game… (copying the ISO can take a minute)');
+  busy(true, 'saving the edited game… (packing the changed data and copying the ISO can take a few minutes)');
   try {
     const res = await api('/api/save', { output: $('output').value });
     log(res.message, 'ok');
