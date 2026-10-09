@@ -119,8 +119,10 @@ python3 -m ssx3map map "SSX 3 (USA).iso" --location ARA1 -o snowjam.svg
 - `--session K`: pri reset bode číslo K (čísla sú na mape).
 
 Rozmery tvarov netreba zadávať. Nástroj ich nastaví podľa toho, aké veľké sú
-v danom mieste pláty terénu (na Snow Jame zhruba 10 m). Tvar menší ako 1,5
-plátu by sa rozmazal, preto ho nástroj bez `--force` odmietne.
+v danom mieste pláty terénu (na Snow Jame okolo 20 m). Potom porovná výsledný
+povrch so zamýšľaným tvarom. Ak by sa líšil o viac ako štvrtinu výšky, nástroj
+úpravu bez `--force` odmietne. Taký tvar je na danú veľkosť plátov príliš
+malý.
 
 Tvary:
 - `kicker`: skok, ktorý sa otáča po smere trate. Parametre `--height`,

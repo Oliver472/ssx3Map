@@ -142,6 +142,14 @@ class TerrainTest(unittest.TestCase):
             main(['objects', mod, '--location', 'AAA', '--at', '2', '3', '--radius', '5'])
             main(['objects', mod, '--location', 'AAA', '--at', '2', '3', '--radius', '5', '--remove', '-o', mod2])
         text = out.getvalue()
+        # A shape far smaller than the 5 m patches is refused (it would come out wrong).
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as refused:
+                main(['terrain', iso, '--location', 'AAA', '--along', '25', '--shape', 'kicker', '--height', '3',
+                      '--length', '2', '--width', '2', '--drop', '1', '--edge', '1',
+                      '-o', os.path.join(self.tmp.name, 'bad.iso')])
+        self.assertIn('cannot hold this shape', str(refused.exception))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp.name, 'bad.iso')))
         with open(svg, encoding='utf-8') as f:
             body = f.read()
         self.assertTrue(body.startswith('<svg') and body.count('<polygon') == 84)

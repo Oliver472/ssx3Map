@@ -268,11 +268,12 @@ def cmd_terrain(args):
           f'{report.max_dz / cm:.2f} m, odchýlka tvaru do {report.shape_error / cm:.2f} m; objekty posunuté '
           f'{report.objects} (ponechané veľké {report.objects_skipped}); zábradlia {report.rails}; '
           f'štart/reset body {report.points}')
-    feature = {'bump': radius * 2, 'plateau': edge, 'kicker': min(length, drop, width), 'flatten': edge}[args.shape]
-    if feature < 1.5 * typical and not args.force:
-        raise SystemExit(f'the shape ({feature:.0f} m) is too small for patches of about {typical:.0f} m here: '
-                         f'it would come out smeared. Make it at least {1.5 * typical:.0f} m '
-                         f'(--length/--drop/--width/--radius/--edge) or pass --force; nothing written')
+    # Judge the result, not the inputs: how far the refitted surface strays from the wanted shape.
+    allowed = max(30.0, 0.25 * report.max_dz)
+    if report.shape_error > allowed and not args.force:
+        raise SystemExit(f'the terrain here (patches of about {typical:.0f} m) cannot hold this shape: it would be '
+                         f'off by up to {report.shape_error / cm:.2f} m. Make it larger (--length/--drop/--width/'
+                         f'--radius/--edge) or pass --force; nothing written')
     if report.rails_in_area:
         print(f'POZOR: {len(report.rails_in_area)} zábradlí/rails v oblasti sa neposunulo (sú väčšie ako úprava): '
               + ', '.join(report.rails_in_area[:8]), file=sys.stderr)
