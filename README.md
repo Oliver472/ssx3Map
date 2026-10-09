@@ -99,6 +99,47 @@ kde sa textúra používa. `--location ARA1` namiesto `--texture` prefarbí
 všetky textúry, ktoré lokácia používa. Pri paletových textúrach sa mení
 paleta, takže sa zmenia aj všetky mipmapy.
 
+## Vlastná trať jedným príkazom
+
+Príkaz `build` postaví celú novú trať podľa receptu, teda zoznamu úprav
+v jednom JSON súbore. Hotový recept `snowjam_oliver` prestavia Snow Jam.
+Pridá šesť ohybov do strán, osem skokov, vlny, priehlbinu a stolový skok.
+Štart a cieľ ostanú, AI jazdci, reset body aj checkpointy idú s traťou.
+
+```
+python3 -m ssx3map build "SSX 3 (USA).iso" snowjam_oliver --map nova_trat.svg -o SSX3_nova_trat.iso
+```
+
+V PCSX2 potom spusti `SSX3_nova_trat.iso` a jazdi Snow Jam (preteky).
+`nova_trat.svg` otvor v prehliadači a uvidíš novú trať zhora.
+
+Príkaz vypíše každý krok. Krok, ktorý sa na danom mieste nedá urobiť
+(terén by ho neudržal), sa preskočí a zvyšok pokračuje. Ak by sa v hre niečo
+pokazilo, napríklad by AI jazdci blúdili alebo by nefungoval cieľ, vyrob
+trať bez ohybov (len skoky a vlny, overené v PCSX2):
+
+```
+python3 -m ssx3map build "SSX 3 (USA).iso" snowjam_oliver --skip warp -o SSX3_skoky.iso
+```
+
+Vlastný recept je obyčajný JSON. Vzor je v
+`ssx3map/recipes/snowjam_oliver.json`. Miesto sa zadáva metrami od štartu
+(`along`), prípadne aj `side`, `at`, `start` alebo `session` ako v
+príkazovom riadku. Kroky:
+
+| `op` | čo robí | parametre |
+|---|---|---|
+| `warp` | posun kusu trate | `right`, `ahead`, `lift` (m), `turn` (°), `radius`, `edge` |
+| `kicker` | skok | `height`, voliteľne `length`, `width`, `drop`, `edge`, `rotate` |
+| `bump` | kopec / jama | `height`, `radius` |
+| `plateau` | plošina (stolový skok) | `height`, `radius`, `edge` |
+| `flatten` | zarovnanie | `height`, `radius`, `edge` |
+| `objects` | odstránenie / zdvih objektov | `radius`, `name`, `remove` alebo `raise` |
+
+```
+python3 -m ssx3map build "SSX 3 (USA).iso" moja_trat.json --map moja.svg -o SSX3_moja.iso
+```
+
 ## Editor v prehliadači (three.js)
 
 Najpohodlnejšie sa mapa upravuje v 3D editore:
@@ -273,8 +314,15 @@ Spojky sa volajú podľa lokácií, ktoré spájajú (napr. `A_ARA1`). Oblohy s�
 
 ## Čo zatiaľ nejde
 
-- Zmena veľkosti záznamov: nové objekty, iný počet trojuholníkov a podobne.
-  Na to treba pochopiť a prepisovať `bam.sdb`.
+- Úplne nová hora a nová trať v menu. Všetko doteraz je prestavba
+  existujúcej trate, s rovnakým počtom plátov, objektov a bodov trás. Na viac
+  geometrie treba zmeniť veľkosť záznamov, a s tým:
+  - prepísať `bam.sdb` (veľkosti chunkov a ich ohraničenie),
+  - zväčšiť `bam.ssb` a posunúť všetky chunky za zmenou,
+  - presunúť `BAM.BIG` v ISO, keď narastie,
+  - pre novú položku v menu upraviť samotnú hru (`SLUS_207.72`).
+
+  Každý z týchto krokov treba overiť v PCSX2.
 - Pri zdvihnutí alebo znížení terénu (štetec, tvary) sa výška AI trás
   nemení. Jazdci jazdia po teréne, takže to nevadí. Pri posune trate
   (`warp`) sa AI trasy posúvajú.

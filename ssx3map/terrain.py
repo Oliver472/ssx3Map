@@ -159,6 +159,8 @@ def displace(buf, offset, field):
         coef = _fit(dk)
         for j in range(4):
             for i in range(4):
+                if abs(coef[j][i]) < 1e-4:      # rounding noise: keep the stored bits (and zeros) as they are
+                    continue
                 at = offset + COEFF + 16 * (15 - (4 * j + i)) + 4 * k
                 c, = struct.unpack_from('<f', buf, at)
                 struct.pack_into('<f', buf, at, c + coef[j][i])

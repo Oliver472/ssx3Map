@@ -1,0 +1,29 @@
+{
+  "name": "Snow Jam – Oliverova trať",
+  "course": "ARA1",
+  "note": "Snow Jam (4785 m) s novým rozložením: šesť ohybov trate do strán, osem skokov, vlny, priehlbina a stolový skok. Štart a posledných 400 m pred cieľom ostávajú pôvodné.",
+  "steps": [
+    {"op": "warp", "along": 650, "right": 18, "radius": 45, "edge": 80, "note": "ohyb doprava"},
+    {"op": "warp", "along": 1300, "right": -20, "radius": 50, "edge": 90, "note": "ohyb doľava"},
+    {"op": "warp", "along": 1950, "right": 22, "radius": 50, "edge": 90, "note": "ohyb doprava"},
+    {"op": "warp", "along": 2650, "right": -18, "radius": 45, "edge": 80, "note": "ohyb doľava"},
+    {"op": "warp", "along": 3350, "right": 20, "radius": 50, "edge": 90, "note": "ohyb doprava"},
+    {"op": "warp", "along": 4000, "right": -15, "radius": 40, "edge": 70, "note": "ohyb doľava"},
+
+    {"op": "kicker", "along": 300, "height": 3, "note": "prvý skok"},
+    {"op": "kicker", "along": 500, "height": 4},
+    {"op": "kicker", "along": 900, "height": 4},
+    {"op": "bump", "along": 1080, "height": 2.5, "note": "vlny"},
+    {"op": "bump", "along": 1160, "height": 2.5},
+    {"op": "kicker", "along": 1500, "height": 5, "note": "veľký skok"},
+    {"op": "bump", "along": 1720, "height": -3, "note": "priehlbina"},
+    {"op": "kicker", "along": 2150, "height": 4},
+    {"op": "plateau", "along": 2420, "height": 3, "note": "stolový skok"},
+    {"op": "kicker", "along": 2850, "height": 5},
+    {"op": "bump", "along": 3050, "height": 2.5, "note": "vlny"},
+    {"op": "bump", "along": 3130, "height": 2.5},
+    {"op": "bump", "along": 3210, "height": 2.5},
+    {"op": "kicker", "along": 3600, "height": 4},
+    {"op": "kicker", "along": 4250, "height": 6, "note": "finálny skok"}
+  ]
+}

@@ -187,7 +187,8 @@ def warp_rail(buf, offset, size, grab):
         struct.pack_into('<3f', buf, base + 0x78, *nhi)
     distance, = struct.unpack_from('<f', buf, segs[0][0] + 0x84)
     for (base, _, _, _), length in zip(segs, lengths):
-        struct.pack_into('<f', buf, base + 0x84, distance)
+        if abs(struct.unpack_from('<f', buf, base + 0x84)[0] - distance) > 1e-3:
+            struct.pack_into('<f', buf, base + 0x84, distance)
         distance += length
     # Record bounds: around the segment boxes, with the record's own margin kept.
     lo = struct.unpack_from('<3f', buf, offset + 4)
@@ -251,6 +252,9 @@ def warp_aip(buf, base, data, grab):
         struct.pack_into('<3f', buf, at + 12, *lo)
         struct.pack_into('<3f', buf, at + 24, *hi)
         for k, (a, b) in enumerate(zip(moved, moved[1:])):
+            if _same(a, pts[k]) and _same(b, pts[k + 1]):
+                new_s.append(new_s[-1] + path.segments[k][3])      # untouched: keep its bytes
+                continue
             dx, dy, dz = (b[i] - a[i] for i in range(3))
             w = math.hypot(dx, dy)
             seg = (dx / w, dy / w, dz / w, w) if w > 1e-3 else (path.segments[k][0], path.segments[k][1], 0.0, w)

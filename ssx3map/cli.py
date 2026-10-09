@@ -9,7 +9,7 @@ import sys
 import time
 
 from . import aip as aipmod
-from . import instances, mapedit, painter, terrain, texture, warp
+from . import instances, mapedit, painter, recipe, terrain, texture, warp
 from .world import KIND_NAMES, World, resolve_input
 
 
@@ -283,6 +283,36 @@ def cmd_warp(args):
     _save(args, w)
 
 
+def cmd_build(args):
+    try:
+        rc = recipe.load(args.recipe)
+    except (recipe.RecipeError, ValueError) as e:
+        raise SystemExit(f'error: {e}')
+    w = _open(args.input)
+    _check_output(args, w)
+    code = rc['course']
+    skip = tuple(args.skip or ())
+    print(f'{rc.get("name", args.recipe)} ({code}): {len(rc["steps"])} krokov'
+          + (f', bez {", ".join(skip)}' if skip else ''))
+    if rc.get('note'):
+        print(f'  {rc["note"]}')
+    course = mapedit.course_aip(w, code)
+    line0 = aipmod.course_line(course) if course else None
+    t = time.time()
+    results = recipe.run(w, rc, skip=skip, log=print)
+    done = sum(r.ok for r in results)
+    line1 = aipmod.course_line(mapedit.course_aip(w, code)) if course else None
+    print(f'hotovo {done} z {len(results)} krokov ({time.time() - t:.0f} s)'
+          + (f'; trať {line0.length / 100:.0f} m -> {line1.length / 100:.0f} m' if line0 and line1 else ''))
+    if args.map:
+        with open(args.map, 'w', encoding='utf-8') as f:
+            f.write(mapedit.svg_map(w, code))
+        print(f'mapa novej trate: {args.map}')
+    if not done:
+        raise SystemExit('no step could be applied; nothing written')
+    _save(args, w)
+
+
 def cmd_objects(args):
     w = _open(args.input)
     _check_output(args, w)
@@ -412,6 +442,13 @@ def main(argv=None):
                                                'at least 40)')
     sp.add_argument('--force', action='store_true', help='allow squeezing the edge below 35 %%')
     sp.add_argument('-o', '--output', help='output .iso or .BIG')
+    sp.add_argument('-v', '--verbose', action='store_true')
+
+    sp = add('build', cmd_build, 'build a new course layout from a recipe (many edits in one go)')
+    sp.add_argument('recipe', help=f'recipe .json file or a built-in recipe: {", ".join(recipe.builtin_names())}')
+    sp.add_argument('--skip', action='append', choices=recipe.OPS, help='leave out steps of this kind (repeatable)')
+    sp.add_argument('--map', help='also draw the new course from above as SVG')
+    sp.add_argument('-o', '--output', required=True, help='output .iso or .BIG')
     sp.add_argument('-v', '--verbose', action='store_true')
 
     sp = add('objects', cmd_objects, 'list, move or remove objects (their collision moves with them)')
