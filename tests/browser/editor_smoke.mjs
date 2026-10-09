@@ -25,7 +25,7 @@ const check = (cond, msg) => { if (!cond) { console.error('FAIL:', msg); process
 const logText = () => page.$eval('#log', (e) => e.innerText);
 
 await page.goto(url);
-await page.waitForFunction(() => /plátov/.test(document.querySelector('#courseInfo').textContent), null, { timeout: 30000 });
+await page.waitForFunction(() => /patches/.test(document.querySelector('#courseInfo').textContent), null, { timeout: 30000 });
 await page.waitForTimeout(1500);
 await page.screenshot({ path: path.join(out, 'editor-1-loaded.png') });
 const meshes = await page.evaluate(() => window.ssxEditor.state.terrain.children.length);
@@ -43,11 +43,11 @@ const box = await page.$eval('#view', (e) => { const r = e.getBoundingClientRect
 await page.mouse.move(box.x, box.y);
 await page.waitForTimeout(300);
 await page.mouse.click(box.x, box.y);
-await page.waitForFunction(() => /plátov|cannot|terén|terrain/i.test(document.querySelector('#log').innerText), null, { timeout: 30000 });
+await page.waitForFunction(() => /patches|cannot|terrain/i.test(document.querySelector('#log').innerText), null, { timeout: 30000 });
 await page.waitForTimeout(800);
 await page.screenshot({ path: path.join(out, 'editor-2-terrain.png') });
 let text = await logText();
-check(/plátov/.test(text), `terrain edit applied: ${text.split('\n')[0]}`);
+check(/patches/.test(text), `terrain edit applied: ${text.split('\n')[0]}`);
 
 // Brush: drag a stroke across the middle of the view (left button paints in this mode).
 await page.click('button[data-tool=brush]');
@@ -66,16 +66,16 @@ await page.mouse.move(a.x, a.y);
 await page.mouse.down();
 for (let k = 1; k <= 12; k++) await page.mouse.move(a.x + (b.x - a.x) * k / 12, a.y + (b.y - a.y) * k / 12, { steps: 2 });
 await page.mouse.up();
-await page.waitForFunction(() => /štetec: zdvihnutie|brush|stroke/.test(document.querySelector('#log').innerText), null, { timeout: 30000 });
+await page.waitForFunction(() => /brush|stroke/.test(document.querySelector('#log').innerText), null, { timeout: 30000 });
 text = await logText();
-check(/štetec: zdvihnutie, \d+ bodov: \d+ plátov/.test(text), `brush stroke: ${text.split('\n')[0]}`);
+check(/brush: raise, \d+ points: \d+ patches/.test(text), `brush stroke: ${text.split('\n')[0]}`);
 await page.click('#undo');
-await page.waitForFunction(() => (document.querySelector('#log').innerText.match(/späť/g) || []).length >= 1, null, { timeout: 30000 });
+await page.waitForFunction(() => (document.querySelector('#log').innerText.match(/undone/g) || []).length >= 1, null, { timeout: 30000 });
 
 // Undo.
 await page.click('#undo');
-await page.waitForFunction(() => /späť/.test(document.querySelector('#log').innerText), null, { timeout: 30000 });
-check(/späť/.test(await logText()), 'undo');
+await page.waitForFunction(() => /undone/.test(document.querySelector('#log').innerText), null, { timeout: 30000 });
+check(/undone/.test(await logText()), 'undo');
 
 // Move a piece of the course: grab the line at 24 m and drag it 3 m to the side (left button grabs).
 await page.click('button[data-tool=warp]');
@@ -98,12 +98,12 @@ await page.mouse.move(aside.from.x, aside.from.y);
 await page.mouse.down();
 for (let k = 1; k <= 8; k++) await page.mouse.move(aside.from.x + (aside.to.x - aside.from.x) * k / 8, aside.from.y + (aside.to.y - aside.from.y) * k / 8, { steps: 2 });
 const info = await page.$eval('#warpInfo', (e) => e.innerText);
-check(/posun \d/.test(info), `warp preview: ${info}`);
+check(/move \d/.test(info), `warp preview: ${info}`);
 await page.screenshot({ path: path.join(out, 'editor-2b-warp-drag.png') });
 await page.mouse.up();
-await page.waitForFunction(() => /posun \d+(\.\d)? m @|fold|squeeze|nothing|refused|off the/.test(document.querySelector('#log').innerText), null, { timeout: 30000 });
+await page.waitForFunction(() => /move \d+(\.\d)? m @|fold|squeeze|nothing|refused|off the/.test(document.querySelector('#log').innerText), null, { timeout: 30000 });
 text = await logText();
-check(/posun [\d.]+ m @ .*AI trasy/.test(text), `warp applied: ${text.split('\n')[0]}`);
+check(/move [\d.]+ m @ .*AI paths/.test(text), `warp applied: ${text.split('\n')[0]}`);
 const regionsAfter = await page.evaluate(() => JSON.stringify(window.ssxEditor.state.course.regions));
 check(regionsAfter !== aside.regions, 'reset point moved with the ground');
 await page.waitForTimeout(500);
@@ -118,10 +118,10 @@ if (process.env.RECIPE) {
     await window.ssxEditor.loadCourse(r.code, true);
     return r.message;
   }, process.env.RECIPE);
-  check(/recept/.test(res), `recipe applied: ${res}`);
+  check(/recipe/.test(res), `recipe applied: ${res}`);
   const marks = await page.$$eval('#marks button', (b) => b.map((x) => x.textContent));
   check(marks.length > 0, `recipe steps listed: ${marks.join(' | ')}`);
-  check(/zmenené pláty: \d+/.test(await page.$eval('#marks', (e) => e.innerText)), 'changed patches counted');
+  check(/changed patches: \d+/.test(await page.$eval('#marks', (e) => e.innerText)), 'changed patches counted');
   await page.click('#marks button');
   await page.waitForTimeout(800);
   await page.screenshot({ path: path.join(out, 'editor-2d-recipe.png') });
@@ -147,27 +147,29 @@ if (target) {
   await page.mouse.click(screen.x, screen.y);
   await page.waitForTimeout(300);
   const sel = await page.$eval('#selection', (e) => e.innerText);
-  check(!/Klikni/.test(sel), `object selected: ${sel.split('\n')[0]}`);
+  check(!/Click an object/.test(sel), `object selected: ${sel.split('\n')[0]}`);
   await page.click('#objUp');
-  await page.waitForFunction(() => /posun 1 objektov/.test(document.querySelector('#log').innerText), null, { timeout: 30000 });
+  await page.waitForFunction(() => /moved 1 object\b/.test(document.querySelector('#log').innerText), null, { timeout: 30000 });
   check(true, 'object raised');
   await page.click('#objLeft');
-  await page.waitForFunction(() => /otočenie 1 objektov/.test(document.querySelector('#log').innerText), null, { timeout: 30000 });
+  await page.waitForFunction(() => /turned 1 object\b/.test(document.querySelector('#log').innerText), null, { timeout: 30000 });
   check(true, 'object rotated');
   await page.click('#objPlace');
   const spot = await onLine(25);
   await page.mouse.click(spot.x + 25, spot.y);
-  await page.waitForFunction(() => /premiestnenie 1 objektov|off the terrain/.test(document.querySelector('#log').innerText), null, { timeout: 30000 });
-  check(/premiestnenie 1 objektov/.test(await logText()), 'object placed by click');
+  await page.waitForFunction(() => /placed 1 object\b|off the terrain/.test(document.querySelector('#log').innerText), null, { timeout: 30000 });
+  check(/placed 1 object\b/.test(await logText()), 'object placed by click');
 }
 
 // Save.
 const outIso = path.join(out, 'editor-saved.iso');
 await page.fill('#output', outIso);
+const lastLine = (await logText()).split('\n')[0];
 await page.click('#save');
-await page.waitForFunction(() => /uložené|error|nothing/i.test(document.querySelector('#log').innerText), null, { timeout: 60000 });
+await page.waitForFunction((last) => document.querySelector('#log').innerText.split('\n')[0] !== last, lastLine,
+  { timeout: 60000 });
 text = await logText();
-check(/uložené/.test(text) && fs.existsSync(outIso), `saved: ${text.split('\n')[0]}`);
+check(/^saved /.test(text) && fs.existsSync(outIso), `saved: ${text.split('\n')[0]}`);
 await page.screenshot({ path: path.join(out, 'editor-3-final.png') });
 check(errors.length === 0, `no page errors ${errors.join(' | ')}`);
 await browser.close();

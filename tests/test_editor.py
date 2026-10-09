@@ -81,7 +81,7 @@ class EditorApiTest(unittest.TestCase):
         before = {p['k']: p['c'] for p in course['patches']}
         status, res = self.call('/api/terrain', dict(code='AAA', x=1500, y=2500, shape='bump', height=3))
         self.assertEqual(status, 200, res)
-        self.assertIn('plátov', res['message'])
+        self.assertIn('patches', res['message'])
         _, course2 = self.call('/api/course?code=AAA')
         changed = [p['k'] for p in course2['patches'] if p['c'] != before[p['k']]]
         self.assertTrue(changed)
@@ -129,8 +129,8 @@ class EditorApiTest(unittest.TestCase):
         rail = course['rails'][0]['pts']
         status, res = self.call('/api/warp', dict(code='AAA', x=1500, y=2500, tx=1800, ty=2500, radius=5, edge=15))
         self.assertEqual(status, 200, res)
-        self.assertIn('AI trasy 2', res['message'])
-        self.assertIn('zvukové spúšťače', res['message'])
+        self.assertIn('AI paths 2', res['message'])
+        self.assertIn('sound triggers', res['message'])
         _, moved = self.call('/api/course?code=AAA')
         self.assertAlmostEqual(next(r for r in moved['regions'] if r['kind'] == 1)['p'][0] - session['p'][0], 300, 1)
         self.assertAlmostEqual(next(o for o in moved['objects'] if o['k'] == obj['k'])['lo'][0] - obj['lo'][0], 300, 1)
@@ -162,7 +162,7 @@ class EditorApiTest(unittest.TestCase):
         self.assertEqual(res['code'], 'AAA')
         self.assertEqual([s['ok'] for s in res['steps']], [True, True])
         _, after = self.call('/api/course?code=AAA')
-        self.assertEqual([m['t'] for m in after['marks']], ['1. ohyb 3 m doprava', '2. kopec +1.5 m'])
+        self.assertEqual([m['t'] for m in after['marks']], ['1. bend 3 m right', '2. hill +1.5 m'])
         self.assertGreater(after['changed'], before['changed'])
         self.assertEqual(after['changed'], sum(p['ch'] for p in after['patches']))
         self.assertTrue(any(o['ch'] for o in after['objects']))

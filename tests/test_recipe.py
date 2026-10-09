@@ -69,8 +69,8 @@ class RecipeTest(unittest.TestCase):
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
             main(['build', self.big, path, '--map', svg, '-o', out])
         text = buf.getvalue()
-        self.assertIn('hotovo 3 z 4 krokov', text)
-        self.assertIn('PRESKOČENÉ', text)
+        self.assertIn('done: 3 of 4 steps', text)
+        self.assertIn('SKIPPED', text)
         self.assertTrue(os.path.getsize(out) == os.path.getsize(self.big))
         with open(svg, encoding='utf-8') as f:
             self.assertIn('<svg', f.read())

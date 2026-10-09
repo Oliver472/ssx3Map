@@ -208,7 +208,7 @@ class WarpCourseTest(unittest.TestCase):
         finish1 = struct.unpack_from('<f', new, mark_off + 16 + 4)[0]
         self.assertAlmostEqual(finish1 - finish0, stretch.at(1500.0, 4500.0) - stretch.at(1500.0, 100.0), delta=0.5)
         self.assertEqual(struct.unpack_from('<f', old, mark_off + 4), struct.unpack_from('<f', new, mark_off + 4))
-        self.assertEqual(report.untouched, ['zvukové spúšťače'])
+        self.assertEqual(report.untouched, ['sound triggers'])
         # Records keep their sizes and places.
         self.assertEqual([(r.kind, r.offset, r.size) for r in recs],
                          [(r.kind, r.offset, r.size) for r in ssb.parse_records(after)])

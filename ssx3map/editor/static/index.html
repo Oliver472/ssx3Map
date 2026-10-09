@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="sk">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SSX 3 editor mapy</title>
+<title>SSX 3 map editor</title>
 <link rel="stylesheet" href="/static/style.css">
 <script type="importmap">
 { "imports": {
@@ -13,138 +13,138 @@
 </head>
 <body>
 <aside id="panel">
-  <h1>SSX 3 · editor mapy</h1>
+  <h1>SSX 3 · map editor</h1>
   <div class="row">
-    <button id="otherGame" class="small">Otvoriť inú hru</button>
+    <button id="otherGame" class="small">Open another game</button>
     <span class="muted small-text" id="gameName"></span>
   </div>
 
   <section>
-    <label>Trať
+    <label>Course
       <select id="course"></select>
     </label>
-    <div class="muted" id="courseInfo">načítavam…</div>
+    <div class="muted" id="courseInfo">loading…</div>
   </section>
 
   <section>
     <div class="row">
-      <label class="check"><input type="checkbox" id="gameLook" checked> herný vzhľad</label>
-      <label class="check"><input type="checkbox" id="showFog" checked> hmla</label>
+      <label class="check"><input type="checkbox" id="gameLook" checked> game look</label>
+      <label class="check"><input type="checkbox" id="showFog" checked> fog</label>
     </div>
     <div class="row">
-      <label class="check"><input type="checkbox" id="showObjects" checked> objekty</label>
-      <label class="check"><input type="checkbox" id="showBoxes"> krabice objektov</label>
+      <label class="check"><input type="checkbox" id="showObjects" checked> objects</label>
+      <label class="check"><input type="checkbox" id="showBoxes"> object boxes</label>
     </div>
     <div class="row">
-      <label class="check"><input type="checkbox" id="showHelpers"> pomocné objekty</label>
-      <label class="check"><input type="checkbox" id="showRails" checked> zábradlia</label>
+      <label class="check"><input type="checkbox" id="showHelpers"> helper objects</label>
+      <label class="check"><input type="checkbox" id="showRails" checked> rails</label>
     </div>
     <div class="row">
-      <label class="check"><input type="checkbox" id="showChanges" checked> zvýrazniť zmeny</label>
-      <label class="check"><input type="checkbox" id="relief" checked> reliéf</label>
-      <label class="check"><input type="checkbox" id="showSky" checked> obloha</label>
+      <label class="check"><input type="checkbox" id="showChanges" checked> highlight changes</label>
+      <label class="check"><input type="checkbox" id="relief" checked> relief</label>
+      <label class="check"><input type="checkbox" id="showSky" checked> sky</label>
     </div>
-    <label>Kamera na trati: <span id="alongLabel">0 m</span>
+    <label>Camera on the course: <span id="alongLabel">0 m</span>
       <input type="range" id="along" min="0" max="1000" step="10" value="0">
     </label>
-    <button id="toStart" class="small">Na štart</button>
+    <button id="toStart" class="small">To the start</button>
   </section>
 
   <section>
-    <label>Nová trať naraz
+    <label>New course in one go
       <select id="recipe">
-        <option value="__flat__">Rovný svah so skokmi (zmaže túto trať)</option>
+        <option value="__flat__">Plain slope with jumps (wipes this course)</option>
       </select>
     </label>
     <div id="flatParams" class="grid2">
-      <label>sklon % <input type="number" id="flatGrade" value="15" step="1" min="2" max="60"></label>
-      <label>šírka m <input type="number" id="flatWidth" value="60" step="5" min="20"></label>
-      <label>mantinely m <input type="number" id="flatWalls" value="12" step="1" min="0"></label>
-      <label>skok každých m <input type="number" id="flatEvery" value="350" step="50" min="0"></label>
-      <label>výšky skokov m <input type="text" id="flatHeights" value="3,4,5"></label>
+      <label>grade % <input type="number" id="flatGrade" value="15" step="1" min="2" max="60"></label>
+      <label>width m <input type="number" id="flatWidth" value="60" step="5" min="20"></label>
+      <label>walls m <input type="number" id="flatWalls" value="12" step="1" min="0"></label>
+      <label>jump every m <input type="number" id="flatEvery" value="350" step="50" min="0"></label>
+      <label>jump heights m <input type="text" id="flatHeights" value="3,4,5"></label>
     </div>
     <div class="row">
-      <button id="applyRecipe" class="small">Postaviť</button>
-      <label class="check hidden" id="recipeNoWarpLabel"><input type="checkbox" id="recipeNoWarp"> bez ohybov</label>
+      <button id="applyRecipe" class="small">Build</button>
+      <label class="check hidden" id="recipeNoWarpLabel"><input type="checkbox" id="recipeNoWarp"> without bends</label>
     </div>
     <div id="marks" class="marks"></div>
   </section>
 
   <section>
     <div class="tabs" role="tablist">
-      <button data-tool="view" class="tab active">Pozerať</button>
-      <button data-tool="brush" class="tab">Štetec</button>
-      <button data-tool="terrain" class="tab">Tvary</button>
-      <button data-tool="warp" class="tab">Posun</button>
-      <button data-tool="objects" class="tab">Objekty</button>
+      <button data-tool="view" class="tab active">View</button>
+      <button data-tool="brush" class="tab">Brush</button>
+      <button data-tool="terrain" class="tab">Shapes</button>
+      <button data-tool="warp" class="tab">Move</button>
+      <button data-tool="objects" class="tab">Objects</button>
     </div>
 
     <div id="tool-view" class="tool">
-      <p class="muted">Ľavé tlačidlo otáča, pravé posúva, koliesko približuje. Myšou nad terénom uvidíš
-        súradnice a vzdialenosť od štartu.</p>
+      <p class="muted">Left button turns, right button pans, the wheel zooms. Hover the terrain to see
+        coordinates and the distance from the start.</p>
     </div>
 
     <div id="tool-brush" class="tool hidden">
-      <label>Štetec
+      <label>Brush
         <select id="brushMode">
-          <option value="raise">zdvihnúť</option>
-          <option value="lower">znížiť</option>
-          <option value="flatten">zarovnať</option>
-          <option value="smooth">vyhladiť</option>
+          <option value="raise">raise</option>
+          <option value="lower">lower</option>
+          <option value="flatten">flatten</option>
+          <option value="smooth">smooth</option>
         </select>
       </label>
       <div class="grid2">
-        <label>polomer (m) <input type="number" id="brushRadius" step="1" placeholder="auto"></label>
-        <label id="brushHeightLabel">výška (m) <input type="number" id="brushHeight" value="2" step="0.5"></label>
+        <label>radius (m) <input type="number" id="brushRadius" step="1" placeholder="auto"></label>
+        <label id="brushHeightLabel">height (m) <input type="number" id="brushHeight" value="2" step="0.5"></label>
       </div>
-      <label id="brushStrengthLabel">sila: <span id="brushStrengthValue">0.7</span>
+      <label id="brushStrengthLabel">strength: <span id="brushStrengthValue">0.7</span>
         <input type="range" id="brushStrength" min="0.1" max="1" step="0.05" value="0.7">
       </label>
-      <label class="check"><input type="checkbox" id="forceBrush"> vynútiť (aj nepresný tvar)</label>
-      <p class="muted">Ťahaj ľavým tlačidlom po teréne, po pustení sa ťah použije. Kameru otáčaš pravým tlačidlom,
-        posúvaš stredným. Prázdny polomer = podľa veľkosti plátov.</p>
+      <label class="check"><input type="checkbox" id="forceBrush"> force (even if the shape is rough)</label>
+      <p class="muted">Drag over the terrain with the left button; the stroke is applied when you let go. The right
+        button turns the camera, the middle one pans. An empty radius follows the patch size.</p>
     </div>
 
     <div id="tool-terrain" class="tool hidden">
-      <label>Tvar
+      <label>Shape
         <select id="shape">
-          <option value="kicker">skok (kicker)</option>
-          <option value="bump">kopec / jama</option>
-          <option value="plateau">plošina</option>
-          <option value="flatten">zarovnať</option>
+          <option value="kicker">jump (kicker)</option>
+          <option value="bump">hill / dip</option>
+          <option value="plateau">plateau</option>
+          <option value="flatten">flatten</option>
         </select>
       </label>
-      <label>Výška (m, záporná = dole) <input type="number" id="height" value="4" step="0.5"></label>
-      <label class="check"><input type="checkbox" id="autoDims" checked> rozmery podľa terénu</label>
+      <label>Height (m, negative = down) <input type="number" id="height" value="4" step="0.5"></label>
+      <label class="check"><input type="checkbox" id="autoDims" checked> sizes from the terrain</label>
       <div class="grid2" id="dims">
-        <label>polomer <input type="number" id="radius" step="1"></label>
-        <label>okraj <input type="number" id="edge" step="1"></label>
-        <label>nájazd <input type="number" id="length" step="1"></label>
-        <label>šírka <input type="number" id="width" step="1"></label>
-        <label>dopad <input type="number" id="drop" step="1"></label>
-        <label>otočenie ° <input type="number" id="rotate" value="0" step="15"></label>
+        <label>radius <input type="number" id="radius" step="1"></label>
+        <label>edge <input type="number" id="edge" step="1"></label>
+        <label>run-up <input type="number" id="length" step="1"></label>
+        <label>width <input type="number" id="width" step="1"></label>
+        <label>landing <input type="number" id="drop" step="1"></label>
+        <label>turn ° <input type="number" id="rotate" value="0" step="15"></label>
       </div>
-      <label class="check"><input type="checkbox" id="forceTerrain"> vynútiť (aj nepresný tvar)</label>
-      <p class="muted">Klikni do terénu. Obrys ukazuje, kam úprava siahne; skok sa natočí po smere trate.</p>
+      <label class="check"><input type="checkbox" id="forceTerrain"> force (even if the shape is rough)</label>
+      <p class="muted">Click the terrain. The outline shows how far the edit reaches; a jump faces down the course.</p>
     </div>
 
     <div id="tool-warp" class="tool hidden">
-      <p class="muted">Chyť terén ľavým tlačidlom a potiahni ho nabok. Vnútri žltého kruhu sa posunie všetko ako
-        celok – terén, objekty, zábradlia, AI trasy, štart a reset body, svetlá aj kamery; po oranžový kruh
-        posun doznieva a terén sa tam natiahne alebo stlačí.</p>
+      <p class="muted">Grab the terrain with the left button and drag it aside. Inside the yellow circle everything
+        moves as a whole: terrain, objects, rails, AI paths, start and reset points, lights and cameras; out to the
+        orange circle the move fades out and the ground stretches or squeezes.</p>
       <div class="grid2">
-        <label>polomer (m) <input type="number" id="warpRadius" value="30" min="0" step="5"></label>
-        <label>okraj (m) <input type="number" id="warpEdge" min="10" step="5" placeholder="auto"></label>
-        <label>otočenie ° <input type="number" id="warpTurn" value="0" step="5"></label>
-        <label>zdvih (m) <input type="number" id="warpLift" value="0" step="1"></label>
+        <label>radius (m) <input type="number" id="warpRadius" value="30" min="0" step="5"></label>
+        <label>edge (m) <input type="number" id="warpEdge" min="10" step="5" placeholder="auto"></label>
+        <label>turn ° <input type="number" id="warpTurn" value="0" step="5"></label>
+        <label>lift (m) <input type="number" id="warpLift" value="0" step="1"></label>
       </div>
-      <label class="check"><input type="checkbox" id="forceWarp"> vynútiť (silnejšie stlačenie okraja)</label>
-      <p class="muted" id="warpInfo">Prázdny okraj = 2,5× dĺžka posunu (aspoň 40 m). Kameru otáčaš pravým
-        tlačidlom, posúvaš stredným. S otočením alebo zdvihom stačí kliknúť.</p>
+      <label class="check"><input type="checkbox" id="forceWarp"> force (squeeze the edge harder)</label>
+      <p class="muted" id="warpInfo">An empty edge is 2.5 x the move (at least 40 m). The right button turns the
+        camera, the middle one pans. With a turn or a lift, a click is enough.</p>
     </div>
 
     <div id="tool-objects" class="tool hidden">
-      <div id="selection" class="muted">Klikni na objekt (strom, budovu…).</div>
+      <div id="selection" class="muted">Click an object (a tree, a building…).</div>
       <div class="row">
         <button id="objUp" class="small" disabled>↑ 1 m</button>
         <button id="objDown" class="small" disabled>↓ 1 m</button>
@@ -152,24 +152,24 @@
         <button id="objRight" class="small" disabled>↻ 15°</button>
       </div>
       <div class="row">
-        <button id="objPlace" class="small" disabled>Premiestniť klikom (P)</button>
-        <button id="objRemove" class="small danger" disabled>Odstrániť</button>
+        <button id="objPlace" class="small" disabled>Place by click (P)</button>
+        <button id="objRemove" class="small danger" disabled>Remove</button>
       </div>
-      <label class="check"><input type="checkbox" id="forceObjects"> aj herné pomocné objekty</label>
-      <p class="muted">Vybraný objekt posunieš ťahaním šípok alebo ho klikom premiestniš inam (postaví sa na terén).
-        R ho otočí, Delete ho odstráni (presunie pod horu aj s kolíziou). Takto sa dajú stromy a iné objekty
-        z okolia použiť na novom mieste.</p>
+      <label class="check"><input type="checkbox" id="forceObjects"> include game helper objects</label>
+      <p class="muted">Drag the arrows to move the selected object, or place it elsewhere with a click (it stands
+        on the terrain). R turns it, Delete removes it (moves it under the mountain with its collision). This is how
+        trees and other objects nearby can be reused somewhere new.</p>
     </div>
   </section>
 
   <section>
     <div class="row">
-      <button id="undo">Späť (Ctrl+Z)</button>
+      <button id="undo">Undo (Ctrl+Z)</button>
       <span class="muted" id="undoInfo"></span>
     </div>
-    <label>Uložiť ako <input type="text" id="output"></label>
-    <button id="save" class="primary">Uložiť upravenú hru</button>
-    <button id="play" class="primary play" disabled>Spustiť v PCSX2</button>
+    <label>Save as <input type="text" id="output"></label>
+    <button id="save" class="primary">Save the edited game</button>
+    <button id="play" class="primary play" disabled>Start in PCSX2</button>
   </section>
 
   <section>
@@ -181,22 +181,22 @@
 <div id="tip" class="hidden"></div>
 <div id="startScreen" class="start-screen hidden">
   <div class="start-box">
-    <h1>SSX 3 · editor mapy</h1>
-    <p class="muted">Vyber hru, ktorú chceš otvoriť. ISO hľadám v Dokumentoch, Stiahnutých súboroch a na Ploche.</p>
-    <div id="gameList" class="game-list">hľadám hry…</div>
-    <label>Cesta k ISO <input type="text" id="gamePath" placeholder="/Users/…/SSX 3 (USA).iso"></label>
-    <label>Porovnať zmeny s
+    <h1>SSX 3 · map editor</h1>
+    <p class="muted">Pick the game to open. Disc images are looked for in Documents, Downloads and on the Desktop.</p>
+    <div id="gameList" class="game-list">looking for games…</div>
+    <label>Path to the ISO <input type="text" id="gamePath" placeholder="/Users/…/SSX 3 (USA).iso"></label>
+    <label>Compare changes with
       <select id="comparePath"></select>
     </label>
     <div class="row">
-      <button id="openGame" class="primary">Otvoriť</button>
-      <button id="refreshGames" class="small">Hľadať znova</button>
-      <button id="closeStart" class="small hidden">Zrušiť</button>
+      <button id="openGame" class="primary">Open</button>
+      <button id="refreshGames" class="small">Search again</button>
+      <button id="closeStart" class="small hidden">Cancel</button>
     </div>
     <div id="startMsg" class="muted"></div>
   </div>
 </div>
-<div id="busy" class="hidden"><div class="spinner"></div><span id="busyText">pracujem…</span></div>
+<div id="busy" class="hidden"><div class="spinner"></div><span id="busyText">working…</span></div>
 
 <script type="module" src="/static/app.js"></script>
 </body>

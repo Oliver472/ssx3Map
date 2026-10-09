@@ -1,7 +1,7 @@
 """Terrain patches (world record kind 1) and same-size terrain deformation.
 
 A PS2 terrain record is 432 bytes (layout checked against the retail disc, see
-docs/zistenia.md):
+docs/findings.md):
 
     +0x00..0x0F  ids/flags (+0x0A authored flags; bit 0 = collidable)
     +0x10        lighting rectangle (4 floats)

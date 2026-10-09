@@ -95,7 +95,7 @@ class OpenFromThePageTest(unittest.TestCase):
         # The plain slope from the page, as one undo step.
         status, res = self.call('/api/flat', dict(code='AAA', grade=10, width=12, walls=3, every=0))
         self.assertEqual(status, 200, res)
-        self.assertIn('rovný svah 10 %', res['message'])
+        self.assertIn('plain slope 10 %', res['message'])
         _, course = self.call('/api/course?code=AAA')
         self.assertGreater(course['changed'], 30)
         # No PCSX2 here: a clear message, not a crash.

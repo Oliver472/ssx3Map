@@ -143,7 +143,7 @@ def find_pcsx2():
 def start_pcsx2(iso):
     app = find_pcsx2()
     if app is None:
-        raise FileNotFoundError('PCSX2 sa nenašiel (hľadal som v Applications); spusti hru ručne')
+        raise FileNotFoundError('PCSX2 not found (looked in Applications); start the game yourself')
     if sys.platform == 'darwin':
         cmd = ['open', '-n', '-a', app, '--args', iso]
     else:

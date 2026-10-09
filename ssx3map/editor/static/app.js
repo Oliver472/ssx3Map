@@ -27,7 +27,7 @@ function log(msg, cls = '') {
   $('log').prepend(div);
 }
 
-function busy(on, text = 'pracujem…') {
+function busy(on, text = 'working…') {
   $('busy').classList.toggle('hidden', !on);
   $('busyText').textContent = text;
 }
@@ -353,7 +353,7 @@ async function loadPack(code) {
   const cols = new Uint8Array(buf, at, head.colorCount * 4);
   const pack = { ...head, verts, idx, cols };
   state.packs.set(code, pack);
-  if (head.errors) log(`${code}: ${head.errors} modelov sa nepodarilo prečítať`, 'err');
+  if (head.errors) log(`${code}: ${head.errors} models could not be read`, 'err');
   return pack;
 }
 
@@ -541,7 +541,7 @@ function buildOverlay() {
     ball.position.copy(pos);
     state.overlay.add(ball);
     if (r.kind === 1) state.overlay.add(label(`S${r.slot}`, 'session', pos));
-    else if (r.slot === 0) state.overlay.add(label('ŠTART', 'start', pos));
+    else if (r.slot === 0) state.overlay.add(label('START', 'start', pos));
   }
   for (const m of c.marks || []) {
     const z = m.z ?? surfaceZ(m.x, m.y) ?? state.zmin;
@@ -563,7 +563,7 @@ function buildOverlay() {
 
 // ---------------------------------------------------------------- loading
 async function loadCourse(code, keepView) {
-  busy(true, 'načítavam trať…');
+  busy(true, 'loading the course…');
   try {
     const course = await api(`/api/course?code=${encodeURIComponent(code)}`);
     if (code !== state.code) state.textures.clear();
@@ -596,8 +596,8 @@ async function loadCourse(code, keepView) {
     updateFog();
     const len = state.line ? state.line.length / CM : 0;
     $('along').max = Math.max(10, Math.round(len));
-    $('courseInfo').textContent = `${course.name}: ${course.locations.join(', ')} · ${course.patches.length} plátov, ` +
-      `${course.objects.length} objektov` + (len ? ` · trať ${Math.round(len)} m` : '');
+    $('courseInfo').textContent = `${course.name}: ${course.locations.join(', ')} · ${course.patches.length} patches, ` +
+      `${course.objects.length} objects` + (len ? ` · course ${Math.round(len)} m` : '');
     showMarks(course);
     updateUndo(course.undo);
     if (!keepView || !state.framed) { flyAlong(0); state.framed = true; }
@@ -611,7 +611,7 @@ async function loadCourse(code, keepView) {
 
 function updateUndo(list) {
   $('undo').disabled = !list.length;
-  $('undoInfo').textContent = list.length ? `posledné: ${list[list.length - 1]}` : 'žiadne úpravy';
+  $('undoInfo').textContent = list.length ? `last: ${list[list.length - 1]}` : 'no edits';
 }
 
 function flyTo(x, y, z) {
@@ -628,7 +628,7 @@ function showMarks(course) {
   box.innerHTML = '';
   if (course.changed) {
     box.append(Object.assign(document.createElement('div'), { className: 'changed',
-      textContent: `zmenené pláty: ${course.changed}` + (course.compare ? ' (oproti pôvodnej hre)' : ' (oproti otvorenému ISO)') }));
+      textContent: `changed patches: ${course.changed}` + (course.compare ? ' (against the original game)' : ' (against the opened ISO)') }));
   }
   for (const m of course.marks || []) {
     const b = Object.assign(document.createElement('button'), { className: 'small', textContent: m.t });
@@ -644,8 +644,8 @@ function syncRecipeFields() {
 }
 
 async function applyFlat() {
-  if (!confirm(`Zmazať trať ${state.course ? state.course.name : ''} a postaviť rovný svah? (Späť to vráti.)`)) return;
-  busy(true, 'staviam rovný svah…');
+  if (!confirm(`Wipe the course ${state.course ? state.course.name : ''} and build a plain slope? (Undo brings it back.)`)) return;
+  busy(true, 'building the plain slope…');
   try {
     const res = await api('/api/flat', { code: state.code, grade: $('flatGrade').value, width: $('flatWidth').value,
       walls: $('flatWalls').value, every: $('flatEvery').value, heights: $('flatHeights').value });
@@ -662,10 +662,10 @@ async function applyRecipe() {
   const name = $('recipe').value;
   if (!name) return;
   if (name === '__flat__') return applyFlat();
-  busy(true, 'staviam trať podľa receptu… (s kontrolou miesta v dátach to trvá pár minút)');
+  busy(true, 'building the course from the recipe… (checking the space in the game data takes a few minutes)');
   try {
     const res = await api('/api/recipe', { name, skip: $('recipeNoWarp').checked ? ['warp'] : [] });
-    for (const st of res.steps.slice().reverse()) log(`${st.n}. ${st.tag}: ${st.ok ? 'ok' : 'nedá sa: ' + st.msg}`, st.ok ? '' : 'err');
+    for (const st of res.steps.slice().reverse()) log(`${st.n}. ${st.tag}: ${st.ok ? 'ok' : 'not possible: ' + st.msg}`, st.ok ? '' : 'err');
     log(res.message, 'ok');
     if (res.code !== state.code) { $('course').value = res.code; state.framed = false; }
     await loadCourse(res.code, res.code === state.code);
@@ -874,8 +874,8 @@ function drawWarp(game) {
   if (!g || move < 1) return;
   state.brush.add(drapedLoop(circle(g.tx, g.ty, radius * CM), 0x69f0ae, z));
   state.brush.add(drapedPath([[x, y], [g.tx, g.ty]], 0xff5252, z));
-  $('warpInfo').textContent = `posun ${(move / CM).toFixed(1)} m, okraj ${edge.toFixed(0)} m, terén na okraji ` +
-    `stlačený na ${Math.max(0, squeeze * 100).toFixed(0)} %` + (bad ? ' – príliš veľa, rozšír okraj' : '');
+  $('warpInfo').textContent = `move ${(move / CM).toFixed(1)} m, edge ${edge.toFixed(0)} m, terrain at the edge ` +
+    `squeezed to ${Math.max(0, squeeze * 100).toFixed(0)} %` + (bad ? ' – too much, widen the edge' : '');
   $('warpInfo').classList.toggle('err', bad);
 }
 
@@ -884,13 +884,13 @@ async function commitWarp(g) {
   const turn = parseFloat($('warpTurn').value) || 0;
   const lift = parseFloat($('warpLift').value) || 0;
   if (move < 30 && !turn && !lift) {
-    log('potiahni terén myšou (alebo nastav otočenie či zdvih a klikni)');
+    log('drag the terrain with the mouse (or set a turn or lift and click)');
     updateBrush(null);
     return;
   }
   const { radius, edge } = warpDims(move);
   const [tx, ty] = move < 30 ? [g.x, g.y] : [g.tx, g.ty];
-  busy(true, 'posúvam kus trate…');
+  busy(true, 'moving a piece of the course…');
   try {
     const res = await api('/api/warp', { code: state.code, x: g.x, y: g.y, tx, ty, radius, edge, turn, lift,
       force: $('forceWarp').checked });
@@ -912,7 +912,7 @@ async function applyTerrain(game) {
   const body = { code: state.code, x, y, heading, shape: $('shape').value, height: parseFloat($('height').value),
     force: $('forceTerrain').checked };
   if (!$('autoDims').checked) for (const k of ['radius', 'edge', 'length', 'width', 'drop']) body[k] = parseFloat($(k).value) || null;
-  busy(true, 'upravujem terén…');
+  busy(true, 'editing the terrain…');
   try {
     const res = await api('/api/terrain', body);
     log(res.message, 'ok');
@@ -929,7 +929,7 @@ async function commitStroke(stroke) {
   const body = { code: state.code, points: stroke.points.map(([x, y]) => [x, y]), mode, radius: stroke.radius,
     height: parseFloat($('brushHeight').value) || 0, strength: parseFloat($('brushStrength').value),
     force: $('forceBrush').checked };
-  busy(true, 'upravujem terén…');
+  busy(true, 'editing the terrain…');
   try {
     const res = await api('/api/stroke', body);
     log(res.message, 'ok');
@@ -946,7 +946,7 @@ function syncBrushFields() {
   const mode = $('brushMode').value;
   $('brushHeightLabel').classList.toggle('hidden', mode === 'smooth');
   $('brushStrengthLabel').classList.toggle('hidden', mode === 'raise' || mode === 'lower');
-  $('brushHeightLabel').firstChild.textContent = mode === 'flatten' ? 'posun výšky (m) ' : 'výška (m) ';
+  $('brushHeightLabel').firstChild.textContent = mode === 'flatten' ? 'height shift (m) ' : 'height (m) ';
   if (mode === 'flatten') $('brushHeight').value = 0;
   else if (!(parseFloat($('brushHeight').value) > 0)) $('brushHeight').value = 2;
   $('brushStrengthValue').textContent = $('brushStrength').value;
@@ -965,9 +965,9 @@ function select(obj) {
     $('selection').append(Object.assign(document.createElement('b'), { textContent: obj.n }),
       document.createElement('br'),
       `x ${(((obj.lo[0] + obj.hi[0]) / 2) / CM).toFixed(1)} m, y ${(((obj.lo[1] + obj.hi[1]) / 2) / CM).toFixed(1)} m, ` +
-      `rozmer ${size} m` + (obj.p ? ' · herný pomocný objekt' : ''));
+      `size ${size} m` + (obj.p ? ' · game helper object' : ''));
   } else {
-    $('selection').textContent = 'Klikni na objekt (strom, budovu…).';
+    $('selection').textContent = 'Click an object (a tree, a building…).';
   }
   for (const id of ['objUp', 'objDown', 'objRemove', 'objLeft', 'objRight', 'objPlace']) $(id).disabled = !obj;
   setPlacing(false);
@@ -977,7 +977,7 @@ function select(obj) {
 function setPlacing(on) {
   state.placing = on && !!state.sel;
   $('objPlace').classList.toggle('active', state.placing);
-  $('objPlace').textContent = state.placing ? 'Klikni do terénu… (Esc zruší)' : 'Premiestniť klikom (P)';
+  $('objPlace').textContent = state.placing ? 'Click the terrain… (Esc cancels)' : 'Place by click (P)';
   if (!state.placing) updateBrush(null);
 }
 
@@ -988,7 +988,7 @@ function reselect() {
 
 async function objectAction(action, extra = {}) {
   if (!state.sel) return;
-  busy(true, 'upravujem objekt…');
+  busy(true, 'editing the object…');
   try {
     const res = await api('/api/objects', { code: state.code, action, keys: [state.sel.k], ...extra,
       force: $('forceObjects').checked });
@@ -1094,10 +1094,10 @@ function hover() {
     const p = hitTerrain();
     if (p) {
       const g = toGame(p);
-      text = `x ${(g[0] / CM).toFixed(1)}  y ${(g[1] / CM).toFixed(1)}  výška ${(g[2] / CM).toFixed(1)} m`;
+      text = `x ${(g[0] / CM).toFixed(1)}  y ${(g[1] / CM).toFixed(1)}  height ${(g[2] / CM).toFixed(1)} m`;
       if (state.line) {
         const n = state.line.nearest(g[0], g[1]);
-        text += ` · ${Math.round(n.dist / CM)} m od štartu, ${Math.round(n.off / CM)} m od trate`;
+        text += ` · ${Math.round(n.dist / CM)} m from the start, ${Math.round(n.off / CM)} m off the course`;
       }
       if (!state.grab) updateBrush(g);
     } else if (!state.grab) updateBrush(null);
@@ -1176,7 +1176,7 @@ async function undo() {
 }
 
 async function save() {
-  busy(true, 'ukladám upravenú hru… (kopírovanie ISO môže trvať aj minútu)');
+  busy(true, 'saving the edited game… (copying the ISO can take a minute)');
   try {
     const res = await api('/api/save', { output: $('output').value });
     log(res.message, 'ok');
@@ -1228,31 +1228,31 @@ function pickGame(path) {
 async function showStart(closable) {
   $('startScreen').classList.remove('hidden');
   $('closeStart').classList.toggle('hidden', !closable);
-  $('gameList').textContent = 'hľadám hry…';
+  $('gameList').textContent = 'looking for games…';
   try {
     const res = await api('/api/games');
     foundGames = res.games;
     const list = $('gameList');
     list.innerHTML = '';
-    if (!foundGames.length) list.textContent = 'Žiadne ISO som nenašiel. Napíš cestu k nemu nižšie.';
+    if (!foundGames.length) list.textContent = 'No ISO found. Type its path below.';
     for (const g of foundGames) {
       const b = Object.assign(document.createElement('button'), { className: 'game' });
       b.dataset.path = g.path;
       b.append(Object.assign(document.createElement('b'), { textContent: g.name }));
       b.append(Object.assign(document.createElement('span'), { className: 'badge' + (g.original ? ' original' : ''),
-        textContent: g.original ? 'pôvodná hra' : 'upravená' }));
+        textContent: g.original ? 'original game' : 'edited' }));
       b.append(Object.assign(document.createElement('div'), { className: 'where',
-        textContent: `${g.folder} · ${gb(g.size)} · ${new Date(g.modified * 1000).toLocaleString('sk-SK')}` }));
+        textContent: `${g.folder} · ${gb(g.size)} · ${new Date(g.modified * 1000).toLocaleString()}` }));
       b.addEventListener('click', () => pickGame(g.path));
       b.addEventListener('dblclick', () => { pickGame(g.path); openGame(); });
       list.append(b);
     }
     const cmp = $('comparePath');
     cmp.innerHTML = '';
-    cmp.append(new Option('nič (ukáž len úpravy z tohto otvorenia)', ''));
-    for (const g of foundGames) cmp.append(new Option(`${g.name}${g.original ? ' (pôvodná hra)' : ''}`, g.path));
+    cmp.append(new Option('nothing (show only the edits made since opening)', ''));
+    for (const g of foundGames) cmp.append(new Option(`${g.name}${g.original ? ' (original game)' : ''}`, g.path));
     if (foundGames.length) pickGame(foundGames[0].path);
-    $('startMsg').textContent = res.pcsx2 ? `PCSX2: ${res.pcsx2}` : 'PCSX2 som nenašiel; hru spustíš ručne.';
+    $('startMsg').textContent = res.pcsx2 ? `PCSX2: ${res.pcsx2}` : 'PCSX2 not found; start the game yourself.';
   } catch (e) {
     $('gameList').textContent = e.message;
   }
@@ -1261,7 +1261,7 @@ async function showStart(closable) {
 async function openGame() {
   const path = $('gamePath').value.trim();
   if (!path) return;
-  $('startMsg').textContent = 'otváram…';
+  $('startMsg').textContent = 'opening…';
   try {
     await api('/api/open', { path, compare: $('comparePath').value || null });
     location.reload();
@@ -1292,7 +1292,7 @@ async function start() {
   try {
     const info = await api('/api/info');
     if (!info.loaded) { showStart(false); return; }
-    $('gameName').textContent = info.source.split('/').pop() + (info.compare ? ` · porovnanie s ${info.compare.split('/').pop()}` : '');
+    $('gameName').textContent = info.source.split('/').pop() + (info.compare ? ` · compared with ${info.compare.split('/').pop()}` : '');
     $('play').disabled = !(info.saved || /\.iso$/i.test(info.source));
     $('output').value = info.output;
     for (const c of info.courses) {
@@ -1305,15 +1305,15 @@ async function start() {
       for (const r of await api('/api/recipes')) {
         const opt = document.createElement('option');
         opt.value = r.name;
-        opt.textContent = `${r.title} (${r.steps} krokov)`;
+        opt.textContent = `${r.title} (${r.steps} steps)`;
         opt.title = r.note;
         $('recipe').append(opt);
       }
     } catch (e) { log(e.message, 'err'); }
     const first = info.courses.find((c) => c.code === 'ARA1') || info.courses[0];
-    if (!first) { log('v dátach nie je žiadna známa trať', 'err'); return; }
+    if (!first) { log('no known course in the game data', 'err'); return; }
     $('course').value = first.code;
-    log(`otvorené: ${info.source}`);
+    log(`opened: ${info.source}`);
     await loadCourse(first.code, false);
   } catch (e) {
     log(e.message, 'err');

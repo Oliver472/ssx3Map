@@ -154,8 +154,8 @@ class TerrainTest(unittest.TestCase):
             body = f.read()
         self.assertTrue(body.startswith('<svg') and body.count('<polygon') == 84)
         self.assertIn('20 m', body)
-        self.assertRegex(text, r'terén: \d+ plátov')
-        self.assertIn('odstránené: 1', text)
+        self.assertRegex(text, r'terrain: \d+ patches')
+        self.assertIn('removed: 1', text)
         w = World(mod2)
         (c, rec, inst, _), = mapedit.find_objects(w, 'AAA', frame=terrain.Frame(200.0, 300.0), radius=1e6,
                                                   name='AAA#2')

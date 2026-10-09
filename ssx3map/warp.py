@@ -558,8 +558,8 @@ def warp_cameras(buf, offset, size, grab):
 # The whole course
 # --------------------------------------------------------------------------
 
-UNTOUCHED = {13: 'zvukové spúšťače', 16: 'skripty scén', 19: 'misie', 22: 'lavíny / efekty',
-             -14: 'nečitateľné AI trasy', -21: 'nečitateľný ukazovateľ postupu'}
+UNTOUCHED = {13: 'sound triggers', 16: 'stage scripts', 19: 'missions', 22: 'avalanches / effects',
+             -14: 'unreadable AI paths', -21: 'unreadable progress meter'}
 
 
 @dataclass

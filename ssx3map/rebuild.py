@@ -728,7 +728,7 @@ def flatten_course(world, code, design=None, log=None):
             try:
                 aipmod.decode(old)
             except aipmod.AipError:
-                report.untouched.append('nečitateľné AI trasy')
+                report.untouched.append('unreadable AI paths')
                 continue
             change = warp.warp_aip(buf, rec.offset, old, cmap)
             report.paths += change.paths
@@ -741,6 +741,6 @@ def flatten_course(world, code, design=None, log=None):
         elif kind in warp.UNTOUCHED and rec.size and warp.UNTOUCHED[kind] not in report.untouched:
             report.untouched.append(warp.UNTOUCHED[kind])
     if log:
-        log(f'nová trať: {report.rows} x {report.cols} plátov z {report.slots}, dĺžka plátov '
+        log(f'new course: {report.rows} x {report.cols} patches of {report.slots}, patch length '
             f'{report.fine / 100:.0f}..{report.coarse / 100:.0f} m')
     return report

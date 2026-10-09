@@ -104,18 +104,18 @@ def _tag(step):
     if op == 'warp':
         parts = []
         if step.get('right'):
-            parts.append(f'{abs(step["right"]):.0f} m {"doprava" if step["right"] > 0 else "doľava"}')
+            parts.append(f'{abs(step["right"]):.0f} m {"right" if step["right"] > 0 else "left"}')
         if step.get('ahead'):
-            parts.append(f'{step["ahead"]:+.0f} m dopredu')
+            parts.append(f'{step["ahead"]:+.0f} m ahead')
         if step.get('lift'):
-            parts.append(f'{step["lift"]:+.0f} m hore')
+            parts.append(f'{step["lift"]:+.0f} m up')
         if step.get('turn'):
             parts.append(f'{step["turn"]:+.0f}°')
-        return 'ohyb ' + ', '.join(parts)
-    names = {'kicker': 'skok', 'bump': 'kopec' if h >= 0 else 'jama', 'plateau': 'stôl', 'flatten': 'zarovnanie'}
+        return 'bend ' + ', '.join(parts)
+    names = {'kicker': 'jump', 'bump': 'hill' if h >= 0 else 'dip', 'plateau': 'table', 'flatten': 'flatten'}
     if op in names:
         return f'{names[op]} {h:+.1f} m'
-    return 'objekty ' + ('preč' if step.get('remove') else 'posun')
+    return 'objects ' + ('removed' if step.get('remove') else 'moved')
 
 
 def _place(world, code, step):
@@ -132,8 +132,8 @@ def _warp(world, code, pl, step):
     edge = step.get('edge') or max(40.0, 2.5 * shift / 100)
     grab = warp.Grab((f.x, f.y), move, step.get('radius', 30.0) * 100, edge * 100, turn=step.get('turn', 0.0))
     r = warp.warp_edit(world, code, grab, force=bool(step.get('force')))
-    return (f'posun {shift / 100:.0f} m, {r.patches} plátov, objekty {r.objects}, zábradlia {r.rails}, '
-            f'AI trasy {r.paths}, trať {r.length_change / 100:+.1f} m')
+    return (f'move {shift / 100:.0f} m, {r.patches} patches, objects {r.objects}, rails {r.rails}, '
+            f'AI paths {r.paths}, course {r.length_change / 100:+.1f} m')
 
 
 def _shape(world, code, pl, step):
@@ -146,7 +146,7 @@ def _shape(world, code, pl, step):
     sizes = {k: step.get(k) for k in ('radius', 'edge', 'length', 'width', 'drop')}
     r, dims, unit = mapedit.terrain_edit(world, code, frame, pl.z, op, step['height'],
                                          force=bool(step.get('force')), **sizes)
-    return f'{step["height"]:+.1f} m, {r.patches} plátov (~{unit:.0f} m), objekty {r.objects}, zábradlia {r.rails}'
+    return f'{step["height"]:+.1f} m, {r.patches} patches (~{unit:.0f} m), objects {r.objects}, rails {r.rails}'
 
 
 def _objects(world, code, pl, step):
@@ -166,7 +166,7 @@ def _objects(world, code, pl, step):
         done += 1
     if not done:
         raise mapedit.EditRefused('no matching objects there')
-    return f'{"odstránené" if step.get("remove") else "posunuté"} {done} objektov'
+    return f'{"removed" if step.get("remove") else "moved"} {done} objects'
 
 
 def run(world, recipe, skip=(), leave_out=(), log=None):
@@ -205,7 +205,7 @@ def run(world, recipe, skip=(), leave_out=(), log=None):
         results.append(res)
         if log:
             place = f'{step["along"]:.0f} m' if 'along' in step else where
-            log(f'  {n:2d}. {op:8s} {place:>8s}: {"ok, " if res.ok else "PRESKOČENÉ: "}{res.message}')
+            log(f'  {n:2d}. {op:8s} {place:>8s}: {"ok, " if res.ok else "SKIPPED: "}{res.message}')
     return results
 
 
@@ -229,7 +229,7 @@ def fit(world, open_world, recipe, results, skip=(), log=None):
             raise RecipeError(f'the edits do not fit the game data (chunk {", ".join(map(str, over))})')
         left_out.append(victim.number)
         if log:
-            log(f'  úpravy sa nezmestia do herných dát (chýba ~{max(over.values())} B); '
-                f'vynechávam krok {victim.number} ({victim.op})')
+            log(f'  the edits do not fit the game data (about {max(over.values())} bytes too many); '
+                f'leaving out step {victim.number} ({victim.op})')
         world = open_world()
         results = run(world, recipe, skip=skip, leave_out=left_out)

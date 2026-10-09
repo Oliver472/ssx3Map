@@ -203,9 +203,9 @@ def _placement(w, args):
 
 
 def _describe(pl):
-    z = f'{pl.z / 100:.1f} m' if pl.z is not None else 'mimo terénu'
-    return (f'{pl.description}: x {pl.frame.x / 100:.1f} m, y {pl.frame.y / 100:.1f} m, výška terénu {z}, '
-            f'smer ({pl.frame.fx:.2f}, {pl.frame.fy:.2f})')
+    z = f'{pl.z / 100:.1f} m' if pl.z is not None else 'off the terrain'
+    return (f'{pl.description}: x {pl.frame.x / 100:.1f} m, y {pl.frame.y / 100:.1f} m, ground height {z}, '
+            f'heading ({pl.frame.fx:.2f}, {pl.frame.fy:.2f})')
 
 
 def cmd_map(args):
@@ -216,8 +216,8 @@ def cmd_map(args):
         f.write(svg)
     course = mapedit.course_aip(w, args.location)
     line = aipmod.course_line(course) if course else None
-    print(f'wrote {out}' + (f'; trať {line.length / 100:.0f} m z úsekov {line.parts} '
-                            f'(medzery {[round(g / 100, 1) for g in line.gaps]} m)' if line else ''))
+    print(f'wrote {out}' + (f'; course {line.length / 100:.0f} m from sections {line.parts} '
+                            f'(gaps {[round(g / 100, 1) for g in line.gaps]} m)' if line else ''))
 
 
 SHAPES = mapedit.SHAPES
@@ -229,7 +229,7 @@ def cmd_terrain(args):
     if not args.output:
         raise SystemExit('give -o OUTPUT')
     pl = _placement(w, args)
-    print('miesto: ' + _describe(pl))
+    print('place: ' + _describe(pl))
     try:
         report, dims, unit = mapedit.terrain_edit(
             w, args.location, pl.frame, pl.z, args.shape, args.height, force=args.force, carry=not args.no_carry,
@@ -238,14 +238,14 @@ def cmd_terrain(args):
         raise SystemExit(f'{e}; nothing written')
     shown = {'bump': ('radius',), 'plateau': ('radius', 'edge'), 'flatten': ('radius', 'edge'),
              'kicker': ('length', 'width', 'drop', 'edge')}[args.shape]
-    names = dict(radius='polomer', edge='okraj', length='nájazd', width='šírka', drop='dopad')
-    print(f'tvar: {args.shape} {args.height:+.1f} m, ' + ', '.join(f'{names[k]} {dims[k]:.0f} m' for k in shown)
-          + f' (pláty tu majú okolo {unit:.1f} m)')
-    print(f'terén: {report.patches} plátov, najväčší posun {report.max_dz / 100:.2f} m, odchýlka tvaru do '
-          f'{report.shape_error / 100:.2f} m; objekty posunuté {report.objects} (ponechané veľké '
-          f'{report.objects_skipped}); zábradlia {report.rails}; štart/reset body {report.points}')
+    names = dict(radius='radius', edge='edge', length='run-up', width='width', drop='landing')
+    print(f'shape: {args.shape} {args.height:+.1f} m, ' + ', '.join(f'{names[k]} {dims[k]:.0f} m' for k in shown)
+          + f' (patches here are about {unit:.1f} m)')
+    print(f'terrain: {report.patches} patches, largest change {report.max_dz / 100:.2f} m, shape error up to '
+          f'{report.shape_error / 100:.2f} m; objects moved {report.objects} (large ones left '
+          f'{report.objects_skipped}); rails {report.rails}; start/reset points {report.points}')
     if report.rails_in_area:
-        print(f'POZOR: {len(report.rails_in_area)} zábradlí/rails v oblasti sa neposunulo (sú väčšie ako úprava): '
+        print(f'NOTE: {len(report.rails_in_area)} rails in the area were not moved (larger than the edit): '
               + ', '.join(report.rails_in_area[:8]), file=sys.stderr)
     _save(args, w)
 
@@ -256,7 +256,7 @@ def cmd_warp(args):
     if not args.output:
         raise SystemExit('give -o OUTPUT')
     pl = _placement(w, args)
-    print('miesto: ' + _describe(pl))
+    print('place: ' + _describe(pl))
     f = pl.frame
     right, ahead = args.right * 100, args.ahead * 100
     move = (right * f.rx + ahead * f.fx, right * f.ry + ahead * f.fy, args.lift * 100)
@@ -267,19 +267,19 @@ def cmd_warp(args):
         report = warp.warp_edit(w, args.location, grab, force=args.force)
     except mapedit.EditRefused as e:
         raise SystemExit(f'{e}; nothing written')
-    print(f'posun: {args.right:+.1f} m doprava, {args.ahead:+.1f} m dopredu, zdvih {args.lift:+.1f} m, otočenie '
-          f'{args.turn:+.0f}°; plne v polomere {args.radius:.0f} m, doznieva na {edge:.0f} m '
-          f'(terén najviac stlačený na {report.stretch:.0%})')
-    print(f'terén: {report.patches} plátov, odchýlka do {report.shape_error / 100:.2f} m; objekty {report.objects}, '
-          f'častice {report.particles}, svetlá {report.lights}, zábradlia {report.rails} (odchýlka '
-          f'{report.rail_error / 100:.2f} m), AI/pretekové trasy {report.paths} (udalosti {report.events}), '
-          f'štart/reset body {report.points}, kamery {report.cameras}, zásteny viditeľnosti {report.curtains}, '
-          f'ukazovateľ postupu {report.gates} brán; trať {report.length_change / 100:+.1f} m')
+    print(f'move: {args.right:+.1f} m right, {args.ahead:+.1f} m ahead, lift {args.lift:+.1f} m, turn '
+          f'{args.turn:+.0f}°; whole within {args.radius:.0f} m, fading out over {edge:.0f} m '
+          f'(ground squeezed to {report.stretch:.0%} at most)')
+    print(f'terrain: {report.patches} patches, off by up to {report.shape_error / 100:.2f} m; objects {report.objects}, '
+          f'particles {report.particles}, lights {report.lights}, rails {report.rails} (off by '
+          f'{report.rail_error / 100:.2f} m), AI/race paths {report.paths} (events {report.events}), '
+          f'start/reset points {report.points}, cameras {report.cameras}, visibility curtains {report.curtains}, '
+          f'progress meter {report.gates} gates; course {report.length_change / 100:+.1f} m')
     if report.objects_bent:
-        print(f'POZOR: {len(report.objects_bent)} objektov presahuje okraj posunu a posunulo sa celých: '
+        print(f'NOTE: {len(report.objects_bent)} objects reach past the edge of the move and moved as a whole: '
               + ', '.join(report.objects_bent[:8]), file=sys.stderr)
     if report.untouched:
-        print('neposunuté (formát nepoznáme): ' + ', '.join(report.untouched), file=sys.stderr)
+        print('not moved (format unknown): ' + ', '.join(report.untouched), file=sys.stderr)
     _save(args, w)
 
 
@@ -292,32 +292,32 @@ def cmd_build(args):
     _check_output(args, w)
     code = rc['course']
     skip = tuple(args.skip or ())
-    print(f'{rc.get("name", args.recipe)} ({code}): {len(rc["steps"])} krokov'
-          + (f', bez {", ".join(skip)}' if skip else ''))
+    print(f'{rc.get("name", args.recipe)} ({code}): {len(rc["steps"])} steps'
+          + (f', without {", ".join(skip)}' if skip else ''))
     if rc.get('note'):
         print(f'  {rc["note"]}')
     course = mapedit.course_aip(w, code)
     line0 = aipmod.course_line(course) if course else None
     t = time.time()
     results = recipe.run(w, rc, skip=skip, log=print)
-    print('kontrolujem, či sa úpravy zmestia do herných dát…')
+    print('checking that the edits fit the game data…')
     try:
         w, results, left_out = recipe.fit(w, lambda: _open(args.input), rc, results, skip=skip, log=print)
     except recipe.RecipeError as e:
         raise SystemExit(f'error: {e}; nothing written')
     if left_out:
-        print(f'vynechané kroky (nezmestili sa do herných dát): {", ".join(map(str, sorted(left_out)))}')
+        print(f'left out (did not fit the game data): steps {", ".join(map(str, sorted(left_out)))}')
     done = sum(r.ok for r in results)
     line1 = aipmod.course_line(mapedit.course_aip(w, code)) if course else None
-    print(f'hotovo {done} z {len(results)} krokov ({time.time() - t:.0f} s)'
-          + (f'; trať {line0.length / 100:.0f} m -> {line1.length / 100:.0f} m' if line0 and line1 else ''))
+    print(f'done: {done} of {len(results)} steps ({time.time() - t:.0f} s)'
+          + (f'; course {line0.length / 100:.0f} m -> {line1.length / 100:.0f} m' if line0 and line1 else ''))
     if args.map:
         with open(args.map, 'w', encoding='utf-8') as f:
             f.write(mapedit.svg_map(w, code))
-        print(f'mapa novej trate: {args.map}')
+        print(f'map of the new course: {args.map}')
     if not done:
         raise SystemExit('no step could be applied; nothing written')
-    print(f'ukladám {args.output} (prekódovanie blokov a kópia ISO, pár minút)…', flush=True)
+    print(f'saving {args.output} (re-encoding blocks and copying the ISO, a few minutes)…', flush=True)
     args.verbose = True
     _save(args, w)
 
@@ -338,27 +338,27 @@ def cmd_flat(args):
         jumps = []
     design = rebuild.Design(grade=args.grade / 100, width=args.width, bank=args.wall_width,
                             bank_height=args.wall_height, jumps=jumps)
-    print(f'{code}: zmažem trať ({length:.0f} m) a postavím rovný svah so sklonom {args.grade:.0f} %, '
-          f'šírka {args.width:.0f} m, mantinely {args.wall_height:.0f} m')
+    print(f'{code}: wiping the course ({length:.0f} m) and building a plain slope, grade {args.grade:.0f} %, '
+          f'width {args.width:.0f} m, walls {args.wall_height:.0f} m')
     t = time.time()
     try:
         r = rebuild.flatten_course(w, code, design, log=print)
     except mapedit.EditRefused as e:
         raise SystemExit(f'error: {e}; nothing written')
-    print(f'  skoky: ' + ', '.join(f'{m:.0f} m ({h:.0f} m)' for m, h in r.jumps))
-    print(f'  pláty: {r.used} z {r.slots} (zvyšok schovaný pod horou), riadky {r.rows} x {r.cols}, '
-          f'dĺžka plátov {r.fine / 100:.1f}..{r.coarse / 100:.1f} m')
-    print(f'  trasa vyhladená (o najviac {r.shift / 100:.0f} m od pôvodnej), pokles {r.drop / 100:.0f} m, '
-          f'textúra {r.texture}')
-    print('  textúrové chunky (počet plátov): ' + ', '.join(f'{c}: {n}' for c, n in sorted(r.chunks.items()))
-          + '; typy vrstiev: ' + ', '.join(f'0x{k:X}: {n}' for k, n in sorted(r.layers.items())))
-    print(f'  zmazané: {r.sunk} objektov, {r.rails} zábradlí, {r.lights} svetiel, {r.particles} častíc, '
-          f'{r.curtains} zásten; ponechané pomocné objekty {r.helpers}')
-    print(f'  na novom svahu: AI/pretekové trasy {r.paths}, štart/reset body {r.points}, '
-          f'ukazovateľ postupu {r.gates}, kamery {r.cameras}'
-          + (f'; neposunuté: {", ".join(r.untouched)}' if r.untouched else ''))
+    print('  jumps: ' + ', '.join(f'{m:.0f} m ({h:.0f} m)' for m, h in r.jumps))
+    print(f'  patches: {r.used} of {r.slots} (the rest hidden under the mountain), {r.rows} rows x {r.cols}, '
+          f'patch length {r.fine / 100:.1f}..{r.coarse / 100:.1f} m')
+    print(f'  route smoothed (at most {r.shift / 100:.0f} m from the old one), drop {r.drop / 100:.0f} m, '
+          f'texture {r.texture}')
+    print('  texture chunks (patches): ' + ', '.join(f'{c}: {n}' for c, n in sorted(r.chunks.items()))
+          + '; layer types: ' + ', '.join(f'0x{k:X}: {n}' for k, n in sorted(r.layers.items())))
+    print(f'  removed: {r.sunk} objects, {r.rails} rails, {r.lights} lights, {r.particles} particles, '
+          f'{r.curtains} curtains; game helper objects kept {r.helpers}')
+    print(f'  on the new slope: AI/race paths {r.paths}, start/reset points {r.points}, '
+          f'progress meter {r.gates}, cameras {r.cameras}'
+          + (f'; not moved: {", ".join(r.untouched)}' if r.untouched else ''))
     line = aipmod.course_line(mapedit.course_aip(w, code))
-    print(f'  trať po prestavbe: {line.length / 100:.0f} m ({time.time() - t:.0f} s)')
+    print(f'  course after the rebuild: {line.length / 100:.0f} m ({time.time() - t:.0f} s)')
     for c in w.stream.changed_chunks():
         short = w.stream.shortfall(c)
         if short > 0:
@@ -367,8 +367,8 @@ def cmd_flat(args):
     if args.map:
         with open(args.map, 'w', encoding='utf-8') as f:
             f.write(mapedit.svg_map(w, code))
-        print(f'mapa: {args.map}')
-    print(f'ukladám {args.output} (pár minút)…', flush=True)
+        print(f'map: {args.map}')
+    print(f'saving {args.output} (a few minutes)…', flush=True)
     args.verbose = True
     _save(args, w)
 
@@ -380,15 +380,15 @@ def cmd_objects(args):
     if args.along is not None or args.at or args.start:
         pl = _placement(w, args)
         frame = pl.frame
-        print('okolie: ' + _describe(pl) + f', polomer {args.radius:.0f} m')
+        print('around: ' + _describe(pl) + f', radius {args.radius:.0f} m')
     found = mapedit.find_objects(w, args.location, name=args.name, frame=frame,
                                  radius=args.radius * 100 if frame else None)
     acting = args.remove or args.move or args.raise_by is not None
     for c, rec, inst, label in found:
         x, y, z = inst.centre
         sx, sy, sz = inst.size
-        print(f'{label:48s} x {x / 100:9.1f} y {y / 100:9.1f} z {z / 100:8.1f}  rozmer {sx / 100:.1f}x{sy / 100:.1f}x{sz / 100:.1f} m')
-    print(f'{len(found)} objektov')
+        print(f'{label:48s} x {x / 100:9.1f} y {y / 100:9.1f} z {z / 100:8.1f}  size {sx / 100:.1f}x{sy / 100:.1f}x{sz / 100:.1f} m')
+    print(f'{len(found)} objects')
     if not acting:
         return
     if not args.output:
@@ -406,8 +406,8 @@ def cmd_objects(args):
             d = (0.0, 0.0, args.raise_by * 100)
         instances.translate(w.stream.chunk(c), rec.offset, *d)
         done += 1
-    print(f'{"odstránené" if args.remove else "posunuté"}: {done}'
-          + (f'; vynechané herné pomocné objekty (štart, triggery, resety...): {skipped} (--force ich zahrnie)'
+    print(f'{"removed" if args.remove else "moved"}: {done}'
+          + (f'; game helper objects left alone (start, triggers, resets...): {skipped} (--force includes them)'
              if skipped else ''))
     if done:
         _save(args, w)

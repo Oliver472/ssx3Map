@@ -264,8 +264,8 @@ def svg_map(world, code, objects=True, size=1800):
            f'viewBox="0 0 {width} {height}" font-family="sans-serif">',
            f'<rect width="{width}" height="{height}" fill="#1b1f24"/>',
            f'<text x="{margin}" y="28" fill="#fff" font-size="20">{html.escape(code)}: '
-           f'{", ".join(l.name for l in locs)} · výška {minz / CM:.0f}..{maxz / CM:.0f} m · '
-           f'súradnice v metroch</text>']
+           f'{", ".join(l.name for l in locs)} · height {minz / CM:.0f}..{maxz / CM:.0f} m · '
+           f'coordinates in metres</text>']
     # 100 m grid with labels.
     step = 10000.0
     gx = math.floor(minx / step) * step
@@ -288,7 +288,7 @@ def svg_map(world, code, objects=True, size=1800):
         col = _ramp((z - minz) / ((maxz - minz) or 1))
         cx, cy = sum(q[0] for q in c) / 4, sum(q[1] for q in c) / 4
         out.append(f'<polygon points="{" ".join(f"{X(q[0]):.1f},{Y(q[1]):.1f}" for q in c)}" '
-                   f'fill="rgb{col}"><title>x {cx / CM:.1f}  y {cy / CM:.1f}  výška {z / CM:.1f} m</title></polygon>')
+                   f'fill="rgb{col}"><title>x {cx / CM:.1f}  y {cy / CM:.1f}  height {z / CM:.1f} m</title></polygon>')
     out.append('</g>')
     if objects:
         out.append('<g fill="#2e7d32" fill-opacity="0.8">')
@@ -308,7 +308,7 @@ def svg_map(world, code, objects=True, size=1800):
             out.append(f'<polyline points="{" ".join(f"{X(p[0]):.1f},{Y(p[1]):.1f}" for p in pts)}" '
                        f'fill="none" stroke="{colour}" stroke-width="1.5" stroke-dasharray="6 4"/>')
             out.append(f'<text x="{X(pts[0][0]) + 6:.1f}" y="{Y(pts[0][1]) + 14:.1f}" fill="{colour}" '
-                       f'font-size="12">úsek {path.index} ({path.length / CM:.0f} m)</text>')
+                       f'font-size="12">section {path.index} ({path.length / CM:.0f} m)</text>')
     if line is not None:
         out.append(f'<polyline points="{" ".join(f"{X(p[0]):.1f},{Y(p[1]):.1f}" for p in line.points)}" '
                    f'fill="none" stroke="#ff5252" stroke-width="3" stroke-opacity="0.85"/>')
@@ -323,15 +323,15 @@ def svg_map(world, code, objects=True, size=1800):
     if course is not None:
         for r in course.regions:
             colour = '#00e676' if r.kind == 0 else '#40c4ff'
-            label = f'štart {r.slot}' if r.kind == 0 else f'session {r.slot}'
+            label = f'start {r.slot}' if r.kind == 0 else f'session {r.slot}'
             out.append(f'<circle cx="{X(r.position[0]):.1f}" cy="{Y(r.position[1]):.1f}" r="5" fill="{colour}">'
                        f'<title>{label}  x {r.position[0] / CM:.1f}  y {r.position[1] / CM:.1f}</title></circle>')
             if r.kind == 1 or r.slot == 0:
                 out.append(f'<text x="{X(r.position[0]) - 8:.1f}" y="{Y(r.position[1]) + 18:.1f}" fill="{colour}" '
                            f'font-size="13" text-anchor="end">{label}</text>')
-    out.append(f'<text x="{margin}" y="{height - 12}" fill="#9aa4ae" font-size="13">červená: celá trať s '
-               f'metrami od štartu · prerušované: úseky trasy · zelené bodky: objekty · zelený/modrý krúžok: '
-               f'štart a session (reset) body · najeď myšou na plochu pre súradnice</text>')
+    out.append(f'<text x="{margin}" y="{height - 12}" fill="#9aa4ae" font-size="13">red: the whole course with '
+               f'metres from the start · dashed: path sections · green dots: objects · green/blue rings: '
+               f'start and session (reset) points · hover the ground for coordinates</text>')
     out.append('</svg>')
     return '\n'.join(out)
 

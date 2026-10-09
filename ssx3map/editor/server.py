@@ -76,14 +76,14 @@ class Session:
                 ref = World(resolve_input(compare))
             self._reset(world, ref)
             games.remember(world.source)
-            return dict(message=f'otvorené {world.source}' + (f', porovnávam s {ref.source}' if ref else ''))
+            return dict(message=f'opened {world.source}' + (f', comparing with {ref.source}' if ref else ''))
 
     def play(self, req):
         path = os.path.expanduser(req.get('path') or self.saved or (self.world.source if self.world else ''))
         if not path or not path.lower().endswith('.iso') or not os.path.isfile(path):
-            raise mapedit.EditRefused('nie je čo spustiť: ulož upravenú hru ako .iso')
+            raise mapedit.EditRefused('nothing to start: save the edited game as a .iso first')
         app = games.start_pcsx2(path)
-        return dict(message=f'spúšťam {os.path.basename(path)} v {os.path.basename(app)}')
+        return dict(message=f'starting {os.path.basename(path)} in {os.path.basename(app)}')
 
     # -- reading ----------------------------------------------------------------
     def info(self):
@@ -98,7 +98,7 @@ class Session:
                              or [dict(code=l.name, name=l.name) for l in w.sdb.locations]),
                     locations=[l.name for l in w.sdb.locations],
                     undo=[label for label, _ in self.undo], edits=self.edits,
-                    output=base + ('_upravene.iso' if w.is_iso else '_upravene.BIG'))
+                    output=base + ('_edited.iso' if w.is_iso else '_edited.BIG'))
 
     def _base(self, chunk):
         """The chunk as it is in the game we compare with (the reference disc, else this one)."""
@@ -301,10 +301,10 @@ class Session:
                                                       **sizes)
             label = f"{req['shape']} {float(req['height']):+.1f} m @ ({x / 100:.0f}, {y / 100:.0f})"
             self._push(label, snap)
-            return dict(message=(f'{label}: {report.patches} plátov (pláty ~{unit:.0f} m), odchýlka tvaru '
-                                 f'{report.shape_error / 100:.2f} m, objekty {report.objects}, zábradlia '
-                                 f'{report.rails}, štart/reset body {report.points}'
-                                 + (f'; neposunuté zábradlia: {len(report.rails_in_area)}'
+            return dict(message=(f'{label}: {report.patches} patches (~{unit:.0f} m each), shape error '
+                                 f'{report.shape_error / 100:.2f} m, objects {report.objects}, rails '
+                                 f'{report.rails}, start/reset points {report.points}'
+                                 + (f'; rails not moved: {len(report.rails_in_area)}'
                                     if report.rails_in_area else '')),
                         dims={k: round(v, 1) for k, v in dims.items()}, unit=round(unit, 1))
 
@@ -317,12 +317,11 @@ class Session:
             report = mapedit.stroke_edit(w, code, points, req['mode'], float(req['radius']),
                                          height=float(req.get('height') or 0), strength=float(req.get('strength', 1)),
                                          force=bool(req.get('force')), carry=req.get('carry', True))
-            names = {'raise': 'zdvihnutie', 'lower': 'zníženie', 'flatten': 'zarovnanie', 'smooth': 'vyhladenie'}
-            label = f"štetec: {names.get(req['mode'], req['mode'])}, {len(points)} bodov"
+            label = f"brush: {req['mode']}, {len(points)} points"
             self._push(label, snap)
-            return dict(message=(f'{label}: {report.patches} plátov, najväčší posun {report.max_dz / 100:.2f} m, '
-                                 f'odchýlka {report.shape_error / 100:.2f} m, objekty {report.objects}, '
-                                 f'zábradlia {report.rails}, štart/reset body {report.points}'))
+            return dict(message=(f'{label}: {report.patches} patches, largest change {report.max_dz / 100:.2f} m, '
+                                 f'error {report.shape_error / 100:.2f} m, objects {report.objects}, '
+                                 f'rails {report.rails}, start/reset points {report.points}'))
 
     def recipes(self):
         out = []
@@ -355,7 +354,7 @@ class Session:
             if not done:
                 w.stream.restore(snap)
                 raise mapedit.EditRefused('no step of the recipe could be applied here:\n' + '\n'.join(lines))
-            label = f'recept {rc.get("name", req["name"])}'
+            label = f'recipe {rc.get("name", req["name"])}'
             self._push(label, snap)
             depth = len(self.undo)
             for r in done:
@@ -364,11 +363,11 @@ class Session:
                                                          z=round(r.z, 1) if r.z is not None else None,
                                                          t=f'{r.number}. {r.tag}')))
             skipped = [r for r in results if not r.ok]
-            msg = f'{label}: {len(done)} krokov použitých'
+            msg = f'{label}: {len(done)} steps applied'
             if skipped:
-                msg += f', {len(skipped)} sa na teréne nedalo urobiť'
+                msg += f', {len(skipped)} could not be done on this terrain'
             if left_out:
-                msg += f', vynechané pre miesto v dátach: {", ".join(map(str, sorted(left_out)))}'
+                msg += f', left out for room in the game data: {", ".join(map(str, sorted(left_out)))}'
             return dict(message=msg, code=code, steps=[dict(n=r.number, op=r.op, ok=r.ok, tag=r.tag, msg=r.message)
                                                        for r in results])
 
@@ -403,17 +402,17 @@ class Session:
             if over:
                 w.stream.restore(snap)
                 raise mapedit.EditRefused('the new course does not fit the game data')
-            label = f'rovný svah {design.grade * 100:.0f} %, {len(jumps)} skokov'
+            label = f'plain slope {design.grade * 100:.0f} %, {len(jumps)} jumps'
             self._push(label, snap)
             new_line = _aip.course_line(mapedit.course_aip(w, code))
             depth = len(self.undo)
             for k, (m, h) in enumerate(jumps, 1):
                 p, _ = new_line.at(m * 100)
                 self.marks.append((depth, code, dict(x=round(p[0], 1), y=round(p[1], 1), z=None,
-                                                     t=f'skok {k}: {m:.0f} m, {h:+.0f} m')))
-            return dict(message=(f'{label}: {r.used} plátov ({r.rows} x {r.cols}), zmazané {r.sunk} objektov, '
-                                 f'{r.rails} zábradlí; trať {new_line.length / 100:.0f} m, pokles {r.drop / 100:.0f} m; '
-                                 f'textúrové chunky {len(r.chunks)}'))
+                                                     t=f'jump {k}: {m:.0f} m, {h:+.0f} m')))
+            return dict(message=(f'{label}: {r.used} patches ({r.rows} x {r.cols}), removed {r.sunk} objects, '
+                                 f'{r.rails} rails; course {new_line.length / 100:.0f} m, drop {r.drop / 100:.0f} m; '
+                                 f'texture chunks {len(r.chunks)}'))
 
     def warp(self, req):
         """Grab the ground at (x, y) and carry it to (tx, ty) (cm), lifted by `lift` and turned by `turn`."""
@@ -426,25 +425,25 @@ class Session:
                              turn=float(req.get('turn') or 0))
             snap = w.stream.snapshot(mapedit.course_chunks(w, code))
             report = warp.warp_edit(w, code, grab, force=bool(req.get('force')))
-            label = (f'posun {math.hypot(move[0], move[1]) / 100:.1f} m'
-                     + (f', zdvih {move[2] / 100:+.1f} m' if move[2] else '')
-                     + (f', otočenie {float(req.get("turn") or 0):+.0f}°' if req.get('turn') else '')
+            label = (f'move {math.hypot(move[0], move[1]) / 100:.1f} m'
+                     + (f', lift {move[2] / 100:+.1f} m' if move[2] else '')
+                     + (f', turn {float(req.get("turn") or 0):+.0f}°' if req.get('turn') else '')
                      + f' @ ({x / 100:.0f}, {y / 100:.0f})')
             self._push(label, snap)
-            parts = [f'{report.patches} plátov (odchýlka {report.shape_error / 100:.2f} m)',
-                     f'objekty {report.objects}', f'zábradlia {report.rails}', f'AI trasy {report.paths}',
-                     f'štart/reset body {report.points}', f'svetlá {report.lights}',
-                     f'kamery {report.cameras}', f'ukazovateľ postupu {report.gates}',
-                     f'trať {report.length_change / 100:+.1f} m']
+            parts = [f'{report.patches} patches (error {report.shape_error / 100:.2f} m)',
+                     f'objects {report.objects}', f'rails {report.rails}', f'AI paths {report.paths}',
+                     f'start/reset points {report.points}', f'lights {report.lights}',
+                     f'cameras {report.cameras}', f'progress meter {report.gates}',
+                     f'course {report.length_change / 100:+.1f} m']
             notes = []
             if report.stretch < 0.6:
-                notes.append(f'okraj stlačený na {report.stretch:.0%}')
+                notes.append(f'edge squeezed to {report.stretch:.0%}')
             if report.objects_bent:
-                notes.append(f'{len(report.objects_bent)} veľkých objektov sa posunulo celých')
+                notes.append(f'{len(report.objects_bent)} large objects moved as a whole')
             if report.objects_skipped:
-                notes.append(f'{len(report.objects_skipped)} obrovských objektov ostalo')
+                notes.append(f'{len(report.objects_skipped)} huge objects left in place')
             if report.untouched:
-                notes.append('neposunuté: ' + ', '.join(report.untouched))
+                notes.append('not moved: ' + ', '.join(report.untouched))
             return dict(message=f'{label}: ' + ', '.join(parts) + (' · ' + '; '.join(notes) if notes else ''),
                         report=dict(patches=report.patches, objects=report.objects, rails=report.rails,
                                     paths=report.paths, points=report.points, stretch=round(report.stretch, 3),
@@ -482,10 +481,10 @@ class Session:
                 w.stream.restore(snap)
                 raise mapedit.EditRefused('nothing changed' + (f' ({skipped} game helper objects need "force")'
                                                                if skipped else ''))
-            verbs = dict(remove='odstránenie', move='posun', place='premiestnenie', rotate='otočenie')
-            label = f'{verbs.get(action, action)} {done} objektov'
+            verbs = dict(remove='removed', move='moved', place='placed', rotate='turned')
+            label = f'{verbs.get(action, action)} {done} object' + ('' if done == 1 else 's')
             self._push(label, snap)
-            return dict(message=label + (f'; vynechané pomocné: {skipped}' if skipped else ''))
+            return dict(message=label + (f'; game helpers skipped: {skipped}' if skipped else ''))
 
     def undo_last(self):
         with self.lock:
@@ -495,7 +494,7 @@ class Session:
             self.world.stream.restore(snap)
             self.marks = [m for m in self.marks if m[0] <= len(self.undo)]
             self.edits += 1
-            return dict(message=f'späť: {label}')
+            return dict(message=f'undone: {label}')
 
     def save(self, output):
         with self.lock:
@@ -509,7 +508,7 @@ class Session:
             report = self.world.save(output)
             self.saved = output
             games.remember(output)
-            return dict(message=f'uložené {output}: {len(report)} blokov prekódovaných, overené '
+            return dict(message=f'saved {output}: {len(report)} blocks re-encoded, verified '
                                 f'({time.time() - t:.0f} s)', output=output)
 
 
@@ -605,7 +604,7 @@ def serve(world=None, port=8765, open_browser=True, reference=None):
     Handler.session = Session(world, reference)
     httpd = ThreadingHTTPServer(('127.0.0.1', port), Handler)
     url = f'http://127.0.0.1:{httpd.server_address[1]}/'
-    print(f'editor beží na {url}  (ukončíš Ctrl+C)', flush=True)
+    print(f'the editor runs at {url}  (Ctrl+C stops it)', flush=True)
     if open_browser:
         import webbrowser
         webbrowser.open(url)
