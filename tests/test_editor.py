@@ -1,5 +1,6 @@
 import json
 import os
+import struct
 import tempfile
 import threading
 import unittest
@@ -59,6 +60,23 @@ class EditorApiTest(unittest.TestCase):
         status, png = self.call('/api/texture?id=7&code=AAA')
         self.assertEqual(status, 200)
         self.assertTrue(png.startswith(b'\x89PNG'))
+        status, png = self.call('/api/lightpage?id=0&code=AAA')
+        self.assertEqual(status, 200)
+        self.assertTrue(png.startswith(b'\x89PNG'))
+        self.assertEqual(course['sky'], 'ASKY')
+        self.assertEqual(course['fog']['far_cm'], 10000.0)
+        self.assertEqual(course['patches'][0]['lp'], 0)
+        self.assertEqual(course['objects'][0]['mod'], '0:5')
+        self.assertEqual(len(course['objects'][0]['m']), 16)
+        status, pack = self.call('/api/models?code=AAA')
+        self.assertEqual(status, 200)
+        self.assertEqual(pack[:4], b'SSXM')
+        n, = struct.unpack_from('<I', pack, 4)
+        head = json.loads(pack[8:8 + n])
+        self.assertEqual(head['errors'], 0)
+        self.assertEqual(head['models']['0:5'][0]['tex'], 7)
+        self.assertEqual(len(pack), 8 + n + head['vertices'] * 20 + head['indices'] * 4 + head['colorCount'] * 4)
+        self.assertEqual(len(head['colors']), 2)
 
         before = {p['k']: p['c'] for p in course['patches']}
         status, res = self.call('/api/terrain', dict(code='AAA', x=1500, y=2500, shape='bump', height=3))

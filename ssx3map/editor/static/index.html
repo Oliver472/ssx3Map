@@ -24,8 +24,12 @@
 
   <section>
     <div class="row">
-      <label class="check"><input type="checkbox" id="showTextures" checked> textúry</label>
+      <label class="check"><input type="checkbox" id="gameLook" checked> herný vzhľad</label>
+      <label class="check"><input type="checkbox" id="showFog" checked> hmla</label>
+    </div>
+    <div class="row">
       <label class="check"><input type="checkbox" id="showObjects" checked> objekty</label>
+      <label class="check"><input type="checkbox" id="showBoxes"> krabice objektov</label>
     </div>
     <div class="row">
       <label class="check"><input type="checkbox" id="showHelpers"> pomocné objekty</label>
@@ -73,7 +77,7 @@
     </div>
 
     <div id="tool-objects" class="tool hidden">
-      <div id="selection" class="muted">Klikni na objekt (zelené krabice).</div>
+      <div id="selection" class="muted">Klikni na objekt (strom, budovu…).</div>
       <div class="row">
         <button id="objUp" class="small" disabled>↑ 1 m</button>
         <button id="objDown" class="small" disabled>↓ 1 m</button>

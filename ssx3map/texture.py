@@ -96,15 +96,18 @@ def _csm1(i):
     return (i & 0xE7) | ((i & 8) << 1) | ((i & 16) >> 1)
 
 
-def decode_rgba(data):
-    """Base mip level as (width, height, RGBA bytes); alpha rescaled to 0..255."""
+def decode_rgba(data, raw_alpha=False):
+    """Base mip level as (width, height, RGBA bytes).
+
+    Alpha in the GS range 0..128 is rescaled to 0..255 unless `raw_alpha` (light
+    pages keep their 0..255 alpha: it is a gain, not a coverage)."""
     shape = parse(data)
     w, h = shape.width, shape.height
     if shape.fmt == 5:
         raw = bytearray(data[0x80:0x80 + w * h * 4])
         if len(raw) != w * h * 4:
             raise TextureError('truncated RGBA texture')
-        if max(raw[3::4], default=0) <= 128:
+        if not raw_alpha and max(raw[3::4], default=0) <= 128:
             raw[3::4] = bytes(min(255, a * 2) for a in raw[3::4])
         return w, h, bytes(raw)
     pal_count = 256 if shape.fmt == 2 else 16

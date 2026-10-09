@@ -43,7 +43,6 @@ view.appendChild(labelRenderer.domElement);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xa9c2d6);
-scene.fog = new THREE.Fog(0xa9c2d6, 1500, 6000);
 const camera = new THREE.PerspectiveCamera(55, 1, 0.5, 20000);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
@@ -77,8 +76,9 @@ const state = {
   code: null, course: null, origin: [0, 0, 0], zmin: 0, zmax: 1,
   terrain: new THREE.Group(), objects: null, overlay: new THREE.Group(), brush: new THREE.Group(),
   tool: 'view', sel: null, index: null, line: null, textures: new Map(), framed: false,
+  models: new THREE.Group(), sky: new THREE.Group(), packs: new Map(), selBox: null,
 };
-scene.add(state.terrain, state.overlay, state.brush);
+scene.add(state.terrain, state.overlay, state.brush, state.models, state.sky);
 
 const toScene = (p) => new THREE.Vector3((p[0] - state.origin[0]) / CM, (p[2] - state.origin[2]) / CM,
   -(p[1] - state.origin[1]) / CM);
@@ -220,20 +220,191 @@ function disposeGroup(group) {
 
 const colouredMaterial = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
 const lowColour = new THREE.Color(0x5b7d9c), highColour = new THREE.Color(0xf4f8fb);
+const gameLook = () => $('gameLook').checked;
 
-function textureFor(id) {
-  if (state.textures.has(id)) return state.textures.get(id);
-  const entry = { material: null, failed: false, waiting: [] };
-  state.textures.set(id, entry);
-  new THREE.TextureLoader().load(`/api/texture?id=${id}&code=${state.code}`, (tex) => {
-    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-    tex.colorSpace = THREE.SRGBColorSpace;
-    tex.anisotropy = 4;
-    entry.material = new THREE.MeshLambertMaterial({ map: tex, side: THREE.DoubleSide });
-    for (const mesh of entry.waiting) if ($('showTextures').checked) mesh.material = entry.material;
-    entry.waiting = [];
-  }, undefined, () => { entry.failed = true; });
-  return entry;
+// ---- game look: the PS2 combines raw texel bytes, so these shaders do too (no colour management).
+const fog = { colour: new THREE.Vector3(0.70, 0.82, 1.0), near: 30, far: 100, max: 0 };
+const VERT_TERRAIN = `precision highp float;
+uniform mat4 modelViewMatrix; uniform mat4 projectionMatrix;
+attribute vec3 position; attribute vec2 uv; attribute vec2 luv;
+varying vec2 vUv; varying vec2 vLuv; varying float vDepth;
+void main() { vUv = uv; vLuv = luv; vec4 mv = modelViewMatrix * vec4(position, 1.0); vDepth = -mv.z;
+  gl_Position = projectionMatrix * mv; }`;
+const FOG_GLSL = `uniform vec3 fogColour; uniform float fogNear; uniform float fogFar; uniform float fogMax;
+vec3 applyFog(vec3 c, float d) { return mix(c, fogColour, fogMax * clamp((d - fogNear) / max(1.0, fogFar - fogNear), 0.0, 1.0)); }`;
+// Terrain (PS2 0x81 blend of the light page over the base texture): C = (T - L.rgb) * L.a / 128.
+const FRAG_TERRAIN = `precision highp float;
+uniform sampler2D map; uniform sampler2D lmap; uniform float hasMap; uniform float hasLight;
+${FOG_GLSL}
+varying vec2 vUv; varying vec2 vLuv; varying float vDepth;
+void main() {
+  vec3 t = hasMap > 0.5 ? texture2D(map, vUv).rgb : vec3(0.86, 0.89, 0.93);
+  vec3 c = t;
+  if (hasLight > 0.5) { vec4 l = texture2D(lmap, vLuv); c = clamp((t - l.rgb) * l.a * (255.0 / 128.0), 0.0, 1.0); }
+  gl_FragColor = vec4(applyFog(c, vDepth), 1.0);
+}`;
+const VERT_MODEL = `precision highp float;
+uniform mat4 modelViewMatrix; uniform mat4 projectionMatrix;
+attribute vec3 position; attribute vec2 uv; attribute vec4 color;
+varying vec2 vUv; varying vec4 vCol; varying float vDepth;
+void main() { vUv = uv; vCol = color; vec4 mv = modelViewMatrix * vec4(position, 1.0); vDepth = -mv.z;
+  gl_Position = projectionMatrix * mv; }`;
+// Static models (TFX MODULATE with the baked colour): C = T * (c5 << 3) >> 7, A = Ta when bit 15 is set.
+const FRAG_MODEL = `precision highp float;
+uniform sampler2D map; uniform float hasMap; uniform float alphaRef; uniform float useFog;
+${FOG_GLSL}
+varying vec2 vUv; varying vec4 vCol; varying float vDepth;
+void main() {
+  vec4 t = hasMap > 0.5 ? texture2D(map, vUv) : vec4(0.75, 0.75, 0.75, 1.0);
+  float a = t.a * vCol.a;
+  if (a < alphaRef) discard;
+  vec3 c = clamp(t.rgb * vCol.rgb * (255.0 / 128.0), 0.0, 1.0);
+  gl_FragColor = vec4(useFog > 0.5 ? applyFog(c, vDepth) : c, 1.0);
+}`;
+const fogUniforms = () => ({ fogColour: { value: fog.colour }, fogNear: { value: fog.near },
+  fogFar: { value: fog.far }, fogMax: { value: fog.max } });
+const gameMaterials = new Set();
+
+function updateFog() {
+  for (const m of gameMaterials) {
+    m.uniforms.fogNear.value = fog.near; m.uniforms.fogFar.value = fog.far;
+    m.uniforms.fogMax.value = $('showFog').checked ? fog.max : 0;
+  }
+  scene.background = gameLook()
+    ? new THREE.Color().setRGB(fog.colour.x, fog.colour.y, fog.colour.z, THREE.SRGBColorSpace)
+    : new THREE.Color(0xa9c2d6);
+}
+
+function rawTexture(url, clamp, onLoad) {
+  // Raw texel bytes, PS2 orientation (v = 0 at the top), no sRGB decoding.
+  return new THREE.TextureLoader().load(url, (tex) => {
+    tex.flipY = false;
+    tex.colorSpace = THREE.NoColorSpace;
+    tex.wrapS = tex.wrapT = clamp ? THREE.ClampToEdgeWrapping : THREE.RepeatWrapping;
+    tex.needsUpdate = true;
+    onLoad(tex);
+  }, undefined, () => onLoad(null));
+}
+
+function cachedTexture(kind, id, code, clamp, apply) {
+  const key = `${kind}:${id}:${clamp ? 'c' : 'r'}`;
+  let entry = state.textures.get(key);
+  if (!entry) {
+    entry = { tex: undefined, waiting: [] };
+    state.textures.set(key, entry);
+    rawTexture(`/api/${kind}?id=${id}&code=${code}`, clamp, (tex) => {
+      entry.tex = tex;
+      for (const fn of entry.waiting) fn(tex);
+      entry.waiting = [];
+    });
+  }
+  if (entry.tex !== undefined) apply(entry.tex);
+  else entry.waiting.push(apply);
+}
+
+function terrainMaterial(tex, page) {
+  const m = new THREE.RawShaderMaterial({ vertexShader: VERT_TERRAIN, fragmentShader: FRAG_TERRAIN,
+    side: THREE.DoubleSide, uniforms: { map: { value: null }, lmap: { value: null }, hasMap: { value: 0 },
+      hasLight: { value: 0 }, ...fogUniforms() } });
+  gameMaterials.add(m);
+  if (tex >= 0) cachedTexture('texture', tex, state.code, false, (t) => {
+    if (t) { m.uniforms.map.value = t; m.uniforms.hasMap.value = 1; } });
+  if (page >= 0) cachedTexture('lightpage', page, state.code, true, (t) => {
+    if (t) { m.uniforms.lmap.value = t; m.uniforms.hasLight.value = 1; } });
+  updateFog();
+  return m;
+}
+
+function modelMaterial(tex, code, sky) {
+  const m = new THREE.RawShaderMaterial({ vertexShader: VERT_MODEL, fragmentShader: FRAG_MODEL,
+    side: THREE.DoubleSide, depthTest: !sky, depthWrite: !sky,
+    uniforms: { map: { value: null }, hasMap: { value: 0 }, alphaRef: { value: sky ? 0.02 : 0.3 },
+      useFog: { value: sky ? 0 : 1 }, ...fogUniforms() } });
+  gameMaterials.add(m);
+  if (tex >= 0) cachedTexture('texture', tex, code, sky, (t) => {
+    if (t) { m.uniforms.map.value = t; m.uniforms.hasMap.value = 1; } });
+  updateFog();
+  return m;
+}
+
+async function loadPack(code) {
+  if (state.packs.has(code)) return state.packs.get(code);
+  const res = await fetch(`/api/models?code=${encodeURIComponent(code)}`);
+  if (!res.ok) { state.packs.set(code, null); return null; }
+  const buf = await res.arrayBuffer();
+  const n = new DataView(buf).getUint32(4, true);
+  const head = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 8, n)));
+  let at = 8 + n;
+  const verts = new Float32Array(buf, at, head.vertices * 5); at += head.vertices * 20;
+  const idx = new Uint32Array(buf, at, head.indices); at += head.indices * 4;
+  const cols = new Uint8Array(buf, at, head.colorCount * 4);
+  const pack = { ...head, verts, idx, cols };
+  state.packs.set(code, pack);
+  if (head.errors) log(`${code}: ${head.errors} modelov sa nepodarilo prečítať`, 'err');
+  return pack;
+}
+
+// Merge every placed model into one geometry per texture (static scenery, one draw per texture).
+function mergeModels(pack, placements, transformPoint, code, sky) {
+  const groups = new Map();
+  for (const pl of placements) {
+    const meshes = pack.models[pl.mod];
+    if (!meshes) continue;
+    const colours = pack.colors[pl.k];
+    for (const mesh of meshes) {
+      if (!groups.has(mesh.tex)) groups.set(mesh.tex, { pos: [], uv: [], col: [], idx: [] });
+      const g = groups.get(mesh.tex);
+      const base = g.pos.length / 3;
+      for (let v = 0; v < mesh.vn; v++) {
+        const o = (mesh.v0 + v) * 5;
+        const p = transformPoint(pack.verts[o], pack.verts[o + 1], pack.verts[o + 2], pl);
+        g.pos.push(p.x, p.y, p.z);
+        g.uv.push(pack.verts[o + 3], pack.verts[o + 4]);
+        const ci = colours && mesh.co + v < colours[1] ? (colours[0] + mesh.co + v) * 4 : -1;
+        if (ci >= 0) g.col.push(pack.cols[ci], pack.cols[ci + 1], pack.cols[ci + 2], pack.cols[ci + 3]);
+        else g.col.push(128, 128, 128, 255);
+      }
+      for (let i = 0; i < mesh.ni; i++) g.idx.push(base + pack.idx[mesh.i0 + i]);
+    }
+  }
+  const out = [];
+  for (const [tex, g] of groups) {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(g.pos, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(g.uv, 2));
+    geo.setAttribute('color', new THREE.Uint8BufferAttribute(g.col, 4, true));
+    geo.setIndex(g.idx);
+    geo.computeBoundingSphere();
+    const mesh = new THREE.Mesh(geo, modelMaterial(tex, code, sky));
+    if (sky) { mesh.renderOrder = -1000; mesh.frustumCulled = false; }
+    out.push(mesh);
+  }
+  return out;
+}
+
+function buildModels() {
+  disposeGroup(state.models);
+  const pack = state.packs.get(state.code);
+  if (!pack || !gameLook() || !$('showObjects').checked) return;
+  const place = (x, y, z, pl) => {
+    const m = pl.m, s = pl.s;
+    x *= s; y *= s; z *= s;
+    // Row vectors (PS2 convention): world = v * M.
+    return toScene([x * m[0] + y * m[4] + z * m[8] + m[12], x * m[1] + y * m[5] + z * m[9] + m[13],
+      x * m[2] + y * m[6] + z * m[10] + m[14]]);
+  };
+  for (const mesh of mergeModels(pack, visibleObjects(), place, state.code, false)) state.models.add(mesh);
+}
+
+function buildSky() {
+  disposeGroup(state.sky);
+  const code = state.course && state.course.sky;
+  const pack = code && state.packs.get(code);
+  if (!pack || !gameLook()) return;
+  // The sky dome is ~3 m across and drawn around the camera before everything else.
+  const place = (x, y, z) => new THREE.Vector3(x / CM, z / CM, -y / CM);
+  const all = Object.keys(pack.models).map((mod) => ({ k: '', mod }));
+  for (const mesh of mergeModels(pack, all, place, code, true)) state.sky.add(mesh);
 }
 
 function buildTerrain() {
@@ -242,8 +413,10 @@ function buildTerrain() {
   const { zmin, zmax } = state;
   const col = new THREE.Color();
   for (const p of state.course.patches) {
-    if (!groups.has(p.t)) groups.set(p.t, { pos: [], nrm: [], uv: [], col: [], idx: [] });
-    const g = groups.get(p.t);
+    const key = `${p.t}|${p.lp}`;
+    if (!groups.has(key)) groups.set(key, { tex: p.t, page: p.lp, pos: [], nrm: [], uv: [], luv: [], col: [], idx: [] });
+    const g = groups.get(key);
+    const lr = p.l;     // lighting rectangle in the light page: u0, v0, du, dv
     const base = g.pos.length / 3;
     const uvc = p.uv;     // corners (0,0), (0,1), (1,0), (1,1)
     for (let b = 0; b <= SEG; b++) for (let a = 0; a <= SEG; a++) {
@@ -258,6 +431,7 @@ function buildTerrain() {
       g.nrm.push(n[0] / len, n[2] / len, -n[1] / len);
       g.uv.push(uvc[0] * (1 - u) * (1 - v) + uvc[4] * u * (1 - v) + uvc[2] * (1 - u) * v + uvc[6] * u * v,
         uvc[1] * (1 - u) * (1 - v) + uvc[5] * u * (1 - v) + uvc[3] * (1 - u) * v + uvc[7] * u * v);
+      g.luv.push(lr[0] + u * lr[2], lr[1] + v * lr[3]);
       col.lerpColors(lowColour, highColour, Math.min(1, Math.max(0, (q[2] - zmin) / (zmax - zmin || 1))));
       g.col.push(col.r, col.g, col.b);
     }
@@ -266,26 +440,18 @@ function buildTerrain() {
       g.idx.push(i0, i1, i2, i1, i3, i2);
     }
   }
-  for (const [tex, g] of groups) {
+  for (const g of groups.values()) {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(g.pos, 3));
     geo.setAttribute('normal', new THREE.Float32BufferAttribute(g.nrm, 3));
     geo.setAttribute('uv', new THREE.Float32BufferAttribute(g.uv, 2));
+    geo.setAttribute('luv', new THREE.Float32BufferAttribute(g.luv, 2));
     geo.setAttribute('color', new THREE.Float32BufferAttribute(g.col, 3));
     geo.setIndex(g.idx);
     geo.computeBoundingSphere();
-    const mesh = new THREE.Mesh(geo, colouredMaterial);
-    mesh.userData.tex = tex;
+    const mesh = new THREE.Mesh(geo, gameLook() ? terrainMaterial(g.tex, g.page) : colouredMaterial);
     state.terrain.add(mesh);
-    applyTexture(mesh);
   }
-}
-
-function applyTexture(mesh) {
-  if (!$('showTextures').checked || mesh.userData.tex < 0) { mesh.material = colouredMaterial; return; }
-  const entry = textureFor(mesh.userData.tex);
-  if (entry.material) mesh.material = entry.material;
-  else { mesh.material = colouredMaterial; if (!entry.failed) entry.waiting.push(mesh); }
 }
 
 function visibleObjects() {
@@ -297,8 +463,9 @@ function buildObjects() {
   if (state.objects) { scene.remove(state.objects); state.objects.geometry.dispose(); state.objects = null; }
   const list = visibleObjects();
   if (!list.length) return;
+  const boxes = !gameLook() || $('showBoxes').checked;
   const mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1),
-    new THREE.MeshLambertMaterial({ transparent: true, opacity: 0.6 }), list.length);
+    new THREE.MeshLambertMaterial({ transparent: true, opacity: 0.6, visible: boxes }), list.length);
   const m = new THREE.Matrix4(), q = new THREE.Quaternion(), colour = new THREE.Color();
   list.forEach((o, i) => {
     const centre = toScene([(o.lo[0] + o.hi[0]) / 2, (o.lo[1] + o.hi[1]) / 2, (o.lo[2] + o.hi[2]) / 2]);
@@ -313,6 +480,16 @@ function buildObjects() {
   mesh.userData.list = list;
   state.objects = mesh;
   scene.add(mesh);
+  if (state.selBox) { scene.remove(state.selBox); state.selBox.geometry.dispose(); state.selBox = null; }
+  const sel = state.sel && list.find((o) => o.k === state.sel.k);
+  if (sel) {
+    const centre = toScene([(sel.lo[0] + sel.hi[0]) / 2, (sel.lo[1] + sel.hi[1]) / 2, (sel.lo[2] + sel.hi[2]) / 2]);
+    const box = new THREE.BoxGeometry(Math.max(0.3, (sel.hi[0] - sel.lo[0]) / CM), Math.max(0.3, (sel.hi[2] - sel.lo[2]) / CM),
+      Math.max(0.3, (sel.hi[1] - sel.lo[1]) / CM));
+    state.selBox = new THREE.LineSegments(new THREE.EdgesGeometry(box), new THREE.LineBasicMaterial({ color: 0xffeb3b }));
+    state.selBox.position.copy(centre);
+    scene.add(state.selBox);
+  }
 }
 
 function label(text, cls, pos) {
@@ -377,9 +554,21 @@ async function loadCourse(code, keepView) {
     }
     state.line = makeLine(course.line);
     state.index = buildIndex(course.patches);
+    if (course.fog) {
+      fog.colour.set(course.fog.r, course.fog.g, course.fog.b);
+      // The painted near/far (30..100 m on Snow Jam) feed the PS2 fog composite; as plain linear
+      // fog that would hide the course, so the page stretches it (an approximation).
+      fog.near = course.fog.near_cm / CM; fog.far = Math.max(fog.near + 1, course.fog.far_cm / CM) * 8; fog.max = 0.75;
+    } else fog.max = 0;
+    for (const m of gameMaterials) m.dispose();
+    gameMaterials.clear();
+    await Promise.all([loadPack(code), course.sky ? loadPack(course.sky) : null]);
     buildTerrain();
+    buildModels();
+    buildSky();
     buildObjects();
     buildOverlay();
+    updateFog();
     const len = state.line ? state.line.length / CM : 0;
     $('along').max = Math.max(10, Math.round(len));
     $('courseInfo').textContent = `${course.name}: ${course.locations.join(', ')} · ${course.patches.length} plátov, ` +
@@ -560,7 +749,7 @@ function select(obj) {
       `x ${(((obj.lo[0] + obj.hi[0]) / 2) / CM).toFixed(1)} m, y ${(((obj.lo[1] + obj.hi[1]) / 2) / CM).toFixed(1)} m, ` +
       `rozmer ${size} m` + (obj.p ? ' · herný pomocný objekt' : ''));
   } else {
-    $('selection').textContent = 'Klikni na objekt (zelené krabice).';
+    $('selection').textContent = 'Klikni na objekt (strom, budovu…).';
   }
   for (const id of ['objUp', 'objDown', 'objRemove']) $(id).disabled = !obj;
   buildObjects();
@@ -665,9 +854,11 @@ $('autoDims').addEventListener('change', () => {
   for (const k of ['radius', 'edge', 'length', 'width', 'drop']) $(k).disabled = $('autoDims').checked;
 });
 $('autoDims').dispatchEvent(new Event('change'));
-$('showTextures').addEventListener('change', () => state.terrain.children.forEach(applyTexture));
-$('showObjects').addEventListener('change', () => { select(null); buildObjects(); });
-$('showHelpers').addEventListener('change', () => { select(null); buildObjects(); });
+$('gameLook').addEventListener('change', () => { buildTerrain(); buildModels(); buildSky(); buildObjects(); updateFog(); });
+$('showFog').addEventListener('change', updateFog);
+$('showBoxes').addEventListener('change', buildObjects);
+$('showObjects').addEventListener('change', () => { select(null); buildObjects(); buildModels(); });
+$('showHelpers').addEventListener('change', () => { select(null); buildObjects(); buildModels(); });
 $('showRails').addEventListener('change', buildOverlay);
 $('along').addEventListener('input', () => flyAlong(parseFloat($('along').value)));
 $('toStart').addEventListener('click', () => flyAlong(0));
@@ -712,6 +903,7 @@ function animate() {
   requestAnimationFrame(animate);
   hover();
   cullLabels();
+  state.sky.position.copy(camera.position);
   controls.update();
   renderer.render(scene, camera);
   labelRenderer.render(scene, camera);

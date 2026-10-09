@@ -236,6 +236,7 @@ def patch_record(x0, y0, track, rid, corner_order=((0, 0), (1, 0), (0, 1), (1, 1
     cz = [[sum(vinv[j][b] * tmp[b][i] for b in range(4)) for i in range(4)] for j in range(4)]
     rec = bytearray(432)
     struct.pack_into('<hh', rec, 8, 2, 9)
+    struct.pack_into('<4f', rec, 0x10, 0.05, 0.05, 0.9, 0.9)      # lighting rectangle in the light page
     for j in range(4):
         for i in range(4):
             cx = x0 if (i, j) == (0, 0) else PATCH_M if (i, j) == (1, 0) else 0.0
@@ -267,13 +268,68 @@ def terrain_grid(x0, y0, nx, ny, track, first_rid=0, corner_order=((0, 0), (1, 0
     return out
 
 
-def placed_instance(x, y, track, rid, size=200.0):
+def placed_instance(x, y, track, rid, size=200.0, model=(0, 5), vertices=8):
+    """An instance of `model` with its own baked colours (one per model vertex)."""
     z = height(x, y)
     m = (1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1)
     data = (bytes(16) + struct.pack('<16f', *m) + struct.pack('<4f', x, y, z + size / 2, size)
             + struct.pack('<3f', x - size / 2, y - size / 2, z) + struct.pack('<3f', x + size / 2, y + size / 2, z + size)
-            + struct.pack('<I', (rid << 8) | track) + bytes(4) + struct.pack('<I', 5 << 8) + bytes(0x40))
+            + struct.pack('<I', (rid << 8) | track) + bytes(4) + struct.pack('<I', (model[1] << 8) | model[0])
+            + struct.pack('<f', size / 200.0))
+    data += bytes(0xA0 - len(data))
+    colours = [(16 + (v % 8)) | (16 << 5) | ((16 - (v % 8)) << 10) | 0x8000 for v in range(vertices)]
+    data += struct.pack('<I', 0x6F000000 | (vertices << 16)) + struct.pack(f'<{vertices}H', *colours)
+    data += bytes(-len(data) % 16 + 16)
     return record(3, track, rid, data)
+
+
+def mdr_model(material=(0, 0)):
+    """A real-format MDR: one node, one group, two strips forming a 2 m tall cross of quads."""
+    scale = (200.0, 200.0, 200.0)
+    quads = [[(-0.5, 0.0, 0.0), (0.5, 0.0, 0.0), (-0.5, 0.0, 1.0), (0.5, 0.0, 1.0)],
+             [(0.0, -0.5, 0.0), (0.0, 0.5, 0.0), (0.0, -0.5, 1.0), (0.0, 0.5, 1.0)]]
+    count = 8
+    strips = [4, 4]
+    out = bytearray(0x200)
+    struct.pack_into('<I', out, 4, 1)                 # nodes
+    struct.pack_into('<I', out, 8, 0x60)              # node table
+    struct.pack_into('<3f', out, 24, *scale)
+    struct.pack_into('<I', out, 36, 0x100)            # data base
+    struct.pack_into('<I', out, 40, 1)                # materials
+    struct.pack_into('<I', out, 44, (material[1] << 8) | material[0])
+    struct.pack_into('<4I', out, 0x60, 0xFFFFFFFF, 0x80, 0, 0xFFFFFFFF)
+    struct.pack_into('<2I', out, 0x80 + 28, 1, 0xC0)  # mesh header: 1 group at 0xC0
+    struct.pack_into('<I', out, 0xC0, 0xD0)
+    struct.pack_into('<HHI', out, 0xD0, 0, 0, 0x00)   # group: material 0, chain at base + 0
+    base = 0x100
+    # DMA chain: vertex block at base+0x40, normal block at base+0x180, terminator.
+    chain = bytearray(48)
+    struct.pack_into('<2I', chain, 0, 0x10000000, 0x40)
+    struct.pack_into('<2I', chain, 16, 0x10000000, 0x180)
+    struct.pack_into('<2I', chain, 32, 0x60000000, 0)
+    vertex = bytearray(0x140)
+    at = 32                                            # first block starts 32 bytes in
+    struct.pack_into('<I', vertex, 0, 0x01000101)
+    struct.pack_into('<I', vertex, at + 32, len(strips))
+    struct.pack_into('<I', vertex, at + 40, count)
+    struct.pack_into(f'<{len(strips)}H', vertex, at + 64, *strips)
+    uv_at = ((at + 64 + 2 * len(strips) + 15) & ~15) + 16
+    pos_at = ((uv_at + 4 * count + 15) & ~15) + 16
+    pts = [p for q in quads for p in q]
+    for v, (x, y, z) in enumerate(pts):
+        struct.pack_into('<2h', vertex, uv_at + 4 * v, int((x + y + 0.5) * 4096), int((1 - z) * 4096))
+        struct.pack_into('<3h', vertex, pos_at + 6 * v, int(x * 32767), int(y * 32767), int(z * 32767))
+    normal = bytearray(16 + 6 * count + 8)
+    struct.pack_into('<2I', normal, 0, 0x20000000, 0x40404040)
+    normal[14] = count
+    data = bytes(out[:base]) + bytes(chain) + bytes(0x40 - len(chain)) + bytes(vertex) + bytes(normal)
+    return data
+
+
+def light_page(w=16, h=16):
+    header = bytes([5]) + (0x80 + w * h * 4).to_bytes(3, 'little') + struct.pack('<HH', w, h) + bytes(0x80 - 8)
+    texels = b''.join(bytes([20 + x * 4, 20 + y * 4, 40, 160]) for y in range(h) for x in range(w))
+    return header + texels
 
 
 def aip_record(points, regions):
@@ -302,13 +358,14 @@ def build_course_world():
     xs = 15 * PATCH_M / 5
     line = [(xs, y, height(xs, y)) for y in (100.0, 1500.0, 3000.0, 4900.0)]
     regions = [(0, 0, line[0], (0.0, 1.0, 0.0)), (1, 1, (xs, 2500.0, height(xs, 2500.0)), (0.0, 1.0, 0.0))]
-    main = (terrain_grid(0.0, 0.0, 6, 10, 0, corner_order=((0, 0), (0, 1), (1, 0), (1, 1)))
+    main = (record(0, 0, 0, struct.pack('<h', 7) + bytes(18)) + record(2, 0, 5, mdr_model())
+            + terrain_grid(0.0, 0.0, 6, 10, 0, corner_order=((0, 0), (0, 1), (1, 0), (1, 1)))
             + placed_instance(1500.0, 2500.0, 0, 1) + placed_instance(200.0, 300.0, 0, 2)
             + record(14, 0, 0, aip_record(line, regions)) + record(14, 0, 1, b'')
             + record(15, 0, 0, painter_record([(0.5, 2.0, 3000.0, 10000.0, 0.7, 0.8, 1.0)])))
     connector = terrain_grid(0.0, 10 * PATCH_M, 6, 4, 1) + record(15, 1, 0, painter_record(
         [(0.5, 2.0, 3000.0, 8000.0, 0.6, 0.7, 0.9)]))
-    chunks = [record(9, 255, 7, texture_8bit(32, 32, 1)), main, connector,
+    chunks = [record(9, 255, 7, texture_8bit(32, 32, 1)) + record(10, 255, 0, light_page()), main, connector,
               record(15, 2, 0, painter_record([(1.0, 0.0, 1.0, 2.0, 0, 0, 0)]))]
     ssb = build_ssb_slots(chunks)
     sdb = build_sdb([('AAA', 1), ('A_AAA', 2), ('ASKY', 3)])

@@ -111,6 +111,12 @@ Otvorí sa stránka `http://127.0.0.1:8765/` s vybranou traťou v 3D. Terminál
 nechaj bežať a editor vypneš klávesmi Ctrl+C. Stránka potrebuje internet, lebo
 three.js sa sťahuje z CDN. Herné dáta ostávajú u teba, editor beží iba lokálne.
 
+- **Herný vzhľad** (zapnutý od začiatku) kreslí trať tak, ako ju skladá hra.
+  Používa skutočné modely objektov (stromy, budovy, zábradlia…) s textúrami
+  a so zapečenými farbami a terén s textúrou aj tieňovou mapou (light page).
+  Pridáva aj oblohu oblasti a hmlu z dát trate. Textúry a modely sa dekódujú
+  z tvojho ISO, takže prvé načítanie trate trvá pár sekúnd. Bez herného
+  vzhľadu sa terén zafarbí podľa výšky a objekty sú krabice.
 - **Pozerať:** ľavé tlačidlo otáča, pravé posúva, koliesko približuje.
   Posuvník „Kamera na trati“ ťa prenesie na zvolený meter trate. Myšou nad
   terénom vidíš súradnice a vzdialenosť od štartu.
@@ -118,7 +124,7 @@ three.js sa sťahuje z CDN. Herné dáta ostávajú u teba, editor beží iba lo
   Pod myšou sa ukáže obrys oblasti, ktorú úprava zasiahne, a klik ju
   vykoná. Skok sa natočí po smere trate, smer sa dá doladiť poľom
   „otočenie“. Rozmery sa nastavia podľa terénu, alebo ich zadáš ručne.
-- **Objekty:** klikni na zelenú krabicu (strom, budovu…) a ťahaj šípky,
+- **Objekty:** klikni na objekt (strom, budovu…) a ťahaj šípky,
   prípadne použi tlačidlá ↑/↓ alebo Odstrániť (aj kláves Delete). Herné
   pomocné objekty (oranžové) sú bez zaškrtnutia „pomocné objekty“ skryté.
 - **Späť** (Ctrl+Z) vráti poslednú úpravu.
@@ -126,6 +132,17 @@ three.js sa sťahuje z CDN. Herné dáta ostávajú u teba, editor beží iba lo
 
 Úpravy na viacerých tratiach sa uložia naraz. Pri každej úprave platia tie
 isté kontroly ako v príkazovom riadku.
+
+Čo sa zatiaľ líši od hry:
+- Hmla je len približná. Hra ju skladá v samostatnom prechode
+  a editor ju napodobňuje obyčajnou hmlou.
+- Chýba ScreenTint (farebný nádych obrazu) a odlesky.
+- Priesvitné modely (svetlá, efekty) sa kreslia so zjednodušeným alfa
+  testom a bez sčítavacieho miešania.
+
+Spôsob, akým hra skladá farby terénu a modelov, je prevzatý z poznámok
+projektu [ssx-web](https://github.com/owattenmaker/ssx-web) (overené tam
+v emulátore).
 
 ## 4. Úpravy trate z príkazového riadku: terén a objekty
 
@@ -241,5 +258,7 @@ Znalosť formátov pochádza z týchto projektov:
 - poznámok v [ssxdecomp/ssx3](https://github.com/ssxdecomp/ssx3) (`docs/notes`),
 - [ssx-web](https://github.com/owattenmaker/ssx-web) (GPL-3.0).
 
-Swizzle textúr a parsovanie painter záznamov vychádzajú z ich popisov a kódu.
+Swizzle textúr, parsovanie painter záznamov, dekodér modelov MDR
+(`ssx3map/models.py`, upravený z `tools/world_models.py` v ssx-web) a vzorce
+pre herný vzhľad editora vychádzajú z ich popisov a kódu.
 Preto je tento nástroj licencovaný ako **GPL-3.0** (súbor `LICENSE`).
