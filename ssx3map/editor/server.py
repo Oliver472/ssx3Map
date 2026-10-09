@@ -115,6 +115,9 @@ class Session:
             patches = []
             changed = 0
             for c, rec, p in mapedit.patches(w, locs):
+                lo, hi = p.bbox
+                if hi[0] - lo[0] < 50 and hi[1] - lo[1] < 50:
+                    continue            # a leftover of a rebuilt course: a few cm, far below
                 coeff = [v for j in range(4) for i in range(4) for v in p.c[j][i]]
                 ch = self._base(c)[rec.offset:rec.offset + rec.size] != p.data
                 changed += ch

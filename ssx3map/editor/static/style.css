@@ -60,7 +60,7 @@ button.active { background: #7a5d10; border-color: #c9a227; }
 .marks .changed { color: #ffb74d; margin: 4px 0; }
 .small-text { font-size: 11px; overflow-wrap: anywhere; }
 button.play { background: #2e6b34; border-color: #43a047; }
-.start { position: fixed; inset: 0; background: rgba(8, 11, 14, .92); z-index: 10; display: flex;
+.start-screen { position: fixed; inset: 0; background: rgba(8, 11, 14, .92); z-index: 10; display: flex;
   align-items: center; justify-content: center; }
 .start-box { width: min(640px, 92vw); max-height: 90vh; overflow-y: auto; background: var(--panel);
   border: 1px solid var(--line); border-radius: 8px; padding: 18px 20px; }

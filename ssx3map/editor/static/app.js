@@ -42,7 +42,10 @@ Object.assign(labelRenderer.domElement.style, { position: 'absolute', top: '0', 
 view.appendChild(labelRenderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0xa9c2d6);
+// The sky is its own pass under everything (like the game): its glows and clouds blend.
+const skyScene = new THREE.Scene();
+renderer.autoClear = false;
+renderer.setClearColor(0xa9c2d6);
 const camera = new THREE.PerspectiveCamera(55, 1, 0.5, 20000);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
@@ -79,7 +82,8 @@ const state = {
   models: new THREE.Group(), sky: new THREE.Group(), packs: new Map(), selBox: null,
   stroke: null, placing: false, grab: null,
 };
-scene.add(state.terrain, state.overlay, state.brush, state.models, state.sky);
+scene.add(state.terrain, state.overlay, state.brush, state.models);
+skyScene.add(state.sky);
 
 const toScene = (p) => new THREE.Vector3((p[0] - state.origin[0]) / CM, (p[2] - state.origin[2]) / CM,
   -(p[1] - state.origin[1]) / CM);
@@ -256,16 +260,18 @@ varying vec2 vUv; varying vec4 vCol; varying float vDepth;
 void main() { vUv = uv; vCol = color; vec4 mv = modelViewMatrix * vec4(position, 1.0); vDepth = -mv.z;
   gl_Position = projectionMatrix * mv; }`;
 // Static models (TFX MODULATE with the baked colour): C = T * (c5 << 3) >> 7, A = Ta when bit 15 is set.
+// The sky (blend = 1) is alpha blended, and parts whose texture did not load are left out.
 const FRAG_MODEL = `precision highp float;
-uniform sampler2D map; uniform float hasMap; uniform float alphaRef; uniform float useFog;
+uniform sampler2D map; uniform float hasMap; uniform float alphaRef; uniform float useFog; uniform float blend;
 ${FOG_GLSL}
 varying vec2 vUv; varying vec4 vCol; varying float vDepth;
 void main() {
+  if (blend > 0.5 && hasMap < 0.5) discard;
   vec4 t = hasMap > 0.5 ? texture2D(map, vUv) : vec4(0.75, 0.75, 0.75, 1.0);
   float a = t.a * vCol.a;
   if (a < alphaRef) discard;
   vec3 c = clamp(t.rgb * vCol.rgb * (255.0 / 128.0), 0.0, 1.0);
-  gl_FragColor = vec4(useFog > 0.5 ? applyFog(c, vDepth) : c, 1.0);
+  gl_FragColor = vec4(useFog > 0.5 ? applyFog(c, vDepth) : c, blend > 0.5 ? a : 1.0);
 }`;
 const fogUniforms = () => ({ fogColour: { value: fog.colour }, fogNear: { value: fog.near },
   fogFar: { value: fog.far }, fogMax: { value: fog.max } });
@@ -276,9 +282,9 @@ function updateFog() {
     m.uniforms.fogNear.value = fog.near; m.uniforms.fogFar.value = fog.far;
     m.uniforms.fogMax.value = $('showFog').checked ? fog.max : 0;
   }
-  scene.background = gameLook()
+  renderer.setClearColor(gameLook()
     ? new THREE.Color().setRGB(fog.colour.x, fog.colour.y, fog.colour.z, THREE.SRGBColorSpace)
-    : new THREE.Color(0xa9c2d6);
+    : new THREE.Color(0xa9c2d6));
 }
 
 function rawTexture(url, clamp, onLoad) {
@@ -324,9 +330,9 @@ function terrainMaterial(tex, page) {
 
 function modelMaterial(tex, code, sky) {
   const m = new THREE.RawShaderMaterial({ vertexShader: VERT_MODEL, fragmentShader: FRAG_MODEL,
-    side: THREE.DoubleSide, depthTest: !sky, depthWrite: !sky,
+    side: THREE.DoubleSide, depthTest: !sky, depthWrite: !sky, transparent: !!sky,
     uniforms: { map: { value: null }, hasMap: { value: 0 }, alphaRef: { value: sky ? 0.02 : 0.3 },
-      useFog: { value: sky ? 0 : 1 }, ...fogUniforms() } });
+      useFog: { value: sky ? 0 : 1 }, blend: { value: sky ? 1 : 0 }, ...fogUniforms() } });
   gameMaterials.add(m);
   if (tex >= 0) cachedTexture('texture', tex, code, sky, (t) => {
     if (t) { m.uniforms.map.value = t; m.uniforms.hasMap.value = 1; } });
@@ -1196,6 +1202,11 @@ function animate() {
   cullLabels();
   state.sky.position.copy(camera.position);
   controls.update();
+  renderer.clear();
+  if (state.sky.children.length && $('showSky').checked) {
+    renderer.render(skyScene, camera);
+    renderer.clearDepth();
+  }
   renderer.render(scene, camera);
   labelRenderer.render(scene, camera);
 }

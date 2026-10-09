@@ -30,6 +30,11 @@ await page.waitForTimeout(1500);
 await page.screenshot({ path: path.join(out, 'editor-1-loaded.png') });
 const meshes = await page.evaluate(() => window.ssxEditor.state.terrain.children.length);
 check(meshes > 0, `terrain meshes built (${meshes})`);
+// Nothing may cover the 3D view (once the START label took the start screen's dark style).
+const covered = await page.evaluate(() => [...document.querySelectorAll('#view *')]
+  .filter((e) => getComputedStyle(e).backgroundColor !== 'rgba(0, 0, 0, 0)' && e.getBoundingClientRect().width > 300)
+  .map((e) => e.className));
+check(covered.length === 0, `nothing covers the view ${covered}`);
 
 // Terrain tool: click the middle of the view.
 await page.click('button[data-tool=terrain]');
