@@ -171,6 +171,17 @@ class WorldStream:
         return len(self.chunks)
 
     # -- writing -----------------------------------------------------------
+    def snapshot(self, chunks):
+        """State of `chunks` for restore(): their edited bytes, or None if unedited."""
+        return {c: (bytes(self._decoded[c]) if c in self._decoded else None) for c in chunks}
+
+    def restore(self, snap):
+        for c, data in snap.items():
+            if data is None:
+                self._decoded.pop(c, None)
+            else:
+                self._decoded[c] = bytearray(data)
+
     def changed_chunks(self):
         return [i for i, d in sorted(self._decoded.items()) if bytes(d) != self.chunk_original(i)]
 

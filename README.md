@@ -99,7 +99,35 @@ kde sa textúra používa. `--location ARA1` namiesto `--texture` prefarbí
 všetky textúry, ktoré lokácia používa. Pri paletových textúrach sa mení
 paleta, takže sa zmenia aj všetky mipmapy.
 
-## 4. Úpravy trate: terén a objekty
+## Editor v prehliadači (three.js)
+
+Najpohodlnejšie sa mapa upravuje v 3D editore:
+
+```
+python3 -m ssx3map editor "SSX 3 (USA).iso"
+```
+
+Otvorí sa stránka `http://127.0.0.1:8765/` s vybranou traťou v 3D. Terminál
+nechaj bežať a editor vypneš klávesmi Ctrl+C. Stránka potrebuje internet, lebo
+three.js sa sťahuje z CDN. Herné dáta ostávajú u teba, editor beží iba lokálne.
+
+- **Pozerať:** ľavé tlačidlo otáča, pravé posúva, koliesko približuje.
+  Posuvník „Kamera na trati“ ťa prenesie na zvolený meter trate. Myšou nad
+  terénom vidíš súradnice a vzdialenosť od štartu.
+- **Terén:** vyber tvar (skok, kopec/jama, plošina, zarovnanie) a výšku.
+  Pod myšou sa ukáže obrys oblasti, ktorú úprava zasiahne, a klik ju
+  vykoná. Skok sa natočí po smere trate, smer sa dá doladiť poľom
+  „otočenie“. Rozmery sa nastavia podľa terénu, alebo ich zadáš ručne.
+- **Objekty:** klikni na zelenú krabicu (strom, budovu…) a ťahaj šípky,
+  prípadne použi tlačidlá ↑/↓ alebo Odstrániť (aj kláves Delete). Herné
+  pomocné objekty (oranžové) sú bez zaškrtnutia „pomocné objekty“ skryté.
+- **Späť** (Ctrl+Z) vráti poslednú úpravu.
+- **Uložiť upravenú hru** zapíše nové ISO. Pôvodné ostane nedotknuté.
+
+Úpravy na viacerých tratiach sa uložia naraz. Pri každej úprave platia tie
+isté kontroly ako v príkazovom riadku.
+
+## 4. Úpravy trate z príkazového riadku: terén a objekty
 
 Terén v SSX 3 je zároveň kolízia: čo zdvihneš alebo znížiš, po tom sa aj jazdí.
 
@@ -120,7 +148,7 @@ python3 -m ssx3map map "SSX 3 (USA).iso" --location ARA1 -o snowjam.svg
 
 Rozmery tvarov netreba zadávať. Nástroj ich nastaví podľa toho, aké veľké sú
 v danom mieste pláty terénu (na Snow Jame okolo 20 m). Potom porovná výsledný
-povrch so zamýšľaným tvarom. Ak by sa líšil o viac ako štvrtinu výšky, nástroj
+povrch so zamýšľaným tvarom. Ak by sa líšil o viac ako 15 % výšky, nástroj
 úpravu bez `--force` odmietne. Taký tvar je na danú veľkosť plátov príliš
 malý.
 
@@ -199,6 +227,9 @@ Spojky sa volajú podľa lokácií, ktoré spájajú (napr. `A_ARA1`). Oblohy s�
 ```
 python -m unittest -v
 ```
+
+Test editora v prehliadači (potrebuje Node a balík `playwright`) je v
+`tests/browser/editor_smoke.mjs`.
 
 Testy si vyrobia vlastný syntetický `BAM.BIG` a ISO. Nepoužívajú žiadne
 herné dáta.

@@ -219,7 +219,7 @@ def cmd_map(args):
                             f'(medzery {[round(g / 100, 1) for g in line.gaps]} m)' if line else ''))
 
 
-SHAPES = ('bump', 'plateau', 'kicker', 'flatten')
+SHAPES = mapedit.SHAPES
 
 
 def cmd_terrain(args):
@@ -227,60 +227,26 @@ def cmd_terrain(args):
     _check_output(args, w)
     if not args.output:
         raise SystemExit('give -o OUTPUT')
-    if abs(args.height) > 60 and not args.force:
-        raise SystemExit('heights beyond 60 m are refused without --force')
     pl = _placement(w, args)
     print('miesto: ' + _describe(pl))
-    f, cm = pl.frame, 100.0
-    local = mapedit.local_patch_size(w, args.location, f)
-    if local is None:
-        raise SystemExit('no terrain near that place; nothing written')
-    unit = local / cm
-    # Defaults scale with the terrain resolution: features under ~1.5 patches come out smeared.
-    radius = args.radius or max(12.0, 2.0 * unit)
-    edge = args.edge or max(5.0, 1.5 * unit)
-    length = args.length or max(20.0, 3.0 * unit)
-    width = args.width or max(12.0, 2.0 * unit)
-    drop = args.drop or max(8.0, 1.5 * unit)
-    if args.shape == 'bump':
-        dz = terrain.bump(f, args.height * cm, radius * cm)
-        dims = f'polomer {radius:.0f} m'
-    elif args.shape == 'plateau':
-        dz = terrain.plateau(f, args.height * cm, radius * cm, edge * cm)
-        dims = f'polomer {radius:.0f} m, okraj {edge:.0f} m'
-    elif args.shape == 'kicker':
-        dz = terrain.kicker(f, args.height * cm, length * cm, width * cm, drop * cm, edge * cm)
-        dims = f'nájazd {length:.0f} m, šírka {width:.0f} m, dopad {drop:.0f} m, okraj {edge:.0f} m'
-    else:
-        if pl.z is None:
-            raise SystemExit('flatten needs a point on the terrain')
-        dz = terrain.flatten_to(f, pl.z + args.height * cm, radius * cm, edge * cm)
-        dims = f'polomer {radius:.0f} m, okraj {edge:.0f} m'
-    print(f'tvar: {args.shape} {args.height:+.1f} m, {dims} (pláty tu majú okolo {unit:.1f} m)')
-    report = mapedit.apply_field(w, args.location, f, dz, carry_objects=not args.no_carry,
-                                 move_points=not args.no_carry)
-    if not report.patches:
-        raise SystemExit('no terrain patch was changed (the place is off the terrain, or the shape falls '
-                         'between the sample points of one patch); nothing written')
-    sizes = sorted(report.patch_sizes)
-    typical = sizes[len(sizes) // 2] / cm
-    print(f'terén: {report.patches} plátov (typický plát {typical:.1f} m), najväčší posun '
-          f'{report.max_dz / cm:.2f} m, odchýlka tvaru do {report.shape_error / cm:.2f} m; objekty posunuté '
-          f'{report.objects} (ponechané veľké {report.objects_skipped}); zábradlia {report.rails}; '
-          f'štart/reset body {report.points}')
-    # Judge the result, not the inputs: how far the refitted surface strays from the wanted shape.
-    allowed = max(30.0, 0.25 * report.max_dz)
-    if report.shape_error > allowed and not args.force:
-        raise SystemExit(f'the terrain here (patches of about {typical:.0f} m) cannot hold this shape: it would be '
-                         f'off by up to {report.shape_error / cm:.2f} m. Make it larger (--length/--drop/--width/'
-                         f'--radius/--edge) or pass --force; nothing written')
+    try:
+        report, dims, unit = mapedit.terrain_edit(
+            w, args.location, pl.frame, pl.z, args.shape, args.height, force=args.force, carry=not args.no_carry,
+            radius=args.radius, edge=args.edge, length=args.length, width=args.width, drop=args.drop)
+    except mapedit.EditRefused as e:
+        raise SystemExit(f'{e}; nothing written')
+    shown = {'bump': ('radius',), 'plateau': ('radius', 'edge'), 'flatten': ('radius', 'edge'),
+             'kicker': ('length', 'width', 'drop', 'edge')}[args.shape]
+    names = dict(radius='polomer', edge='okraj', length='nájazd', width='šírka', drop='dopad')
+    print(f'tvar: {args.shape} {args.height:+.1f} m, ' + ', '.join(f'{names[k]} {dims[k]:.0f} m' for k in shown)
+          + f' (pláty tu majú okolo {unit:.1f} m)')
+    print(f'terén: {report.patches} plátov, najväčší posun {report.max_dz / 100:.2f} m, odchýlka tvaru do '
+          f'{report.shape_error / 100:.2f} m; objekty posunuté {report.objects} (ponechané veľké '
+          f'{report.objects_skipped}); zábradlia {report.rails}; štart/reset body {report.points}')
     if report.rails_in_area:
         print(f'POZOR: {len(report.rails_in_area)} zábradlí/rails v oblasti sa neposunulo (sú väčšie ako úprava): '
               + ', '.join(report.rails_in_area[:8]), file=sys.stderr)
     _save(args, w)
-
-
-PROTECTED = ('trig', 'reset', 'fence', 'collide', 'nis_', 'transport', 'lodge', 'skybox', 'load', 'finish', 'start')
 
 
 def cmd_objects(args):
@@ -305,11 +271,11 @@ def cmd_objects(args):
         raise SystemExit('give -o OUTPUT')
     done = skipped = 0
     for c, rec, inst, label in found:
-        if not args.force and any(k in label.lower() for k in PROTECTED):
+        if not args.force and mapedit.is_protected(label):
             skipped += 1
             continue
         if args.remove:
-            d = (0.0, 0.0, -100000.0)          # 1 km under the mountain, collision included
+            d = (0.0, 0.0, mapedit.SINK)       # 1 km under the mountain, collision included
         elif args.move:
             d = tuple(v * 100 for v in args.move)
         else:
@@ -321,6 +287,12 @@ def cmd_objects(args):
              if skipped else ''))
     if done:
         _save(args, w)
+
+
+def cmd_editor(args):
+    from .editor.server import serve
+    w = _open(args.input)
+    serve(w, port=args.port, open_browser=not args.no_browser)
 
 
 def main(argv=None):
@@ -404,6 +376,10 @@ def main(argv=None):
     sp.add_argument('--force', action='store_true', help='also touch start/trigger/reset helpers')
     sp.add_argument('-o', '--output', help='output .iso or .BIG')
     sp.add_argument('-v', '--verbose', action='store_true')
+
+    sp = add('editor', cmd_editor, 'open the map editor in the browser (three.js)')
+    sp.add_argument('--port', type=int, default=8765)
+    sp.add_argument('--no-browser', action='store_true', help='do not open a browser window')
 
     args = p.parse_args(argv)
     args.fn(args)

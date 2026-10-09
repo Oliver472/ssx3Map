@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="sk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SSX 3 editor mapy</title>
+<link rel="stylesheet" href="/static/style.css">
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }
+</script>
+</head>
+<body>
+<aside id="panel">
+  <h1>SSX 3 · editor mapy</h1>
+
+  <section>
+    <label>Trať
+      <select id="course"></select>
+    </label>
+    <div class="muted" id="courseInfo">načítavam…</div>
+  </section>
+
+  <section>
+    <div class="row">
+      <label class="check"><input type="checkbox" id="showTextures" checked> textúry</label>
+      <label class="check"><input type="checkbox" id="showObjects" checked> objekty</label>
+    </div>
+    <div class="row">
+      <label class="check"><input type="checkbox" id="showHelpers"> pomocné objekty</label>
+      <label class="check"><input type="checkbox" id="showRails" checked> zábradlia</label>
+    </div>
+    <label>Kamera na trati: <span id="alongLabel">0 m</span>
+      <input type="range" id="along" min="0" max="1000" step="10" value="0">
+    </label>
+    <button id="toStart" class="small">Na štart</button>
+  </section>
+
+  <section>
+    <div class="tabs" role="tablist">
+      <button data-tool="view" class="tab active">Pozerať</button>
+      <button data-tool="terrain" class="tab">Terén</button>
+      <button data-tool="objects" class="tab">Objekty</button>
+    </div>
+
+    <div id="tool-view" class="tool">
+      <p class="muted">Ľavé tlačidlo otáča, pravé posúva, koliesko približuje. Myšou nad terénom uvidíš
+        súradnice a vzdialenosť od štartu.</p>
+    </div>
+
+    <div id="tool-terrain" class="tool hidden">
+      <label>Tvar
+        <select id="shape">
+          <option value="kicker">skok (kicker)</option>
+          <option value="bump">kopec / jama</option>
+          <option value="plateau">plošina</option>
+          <option value="flatten">zarovnať</option>
+        </select>
+      </label>
+      <label>Výška (m, záporná = dole) <input type="number" id="height" value="4" step="0.5"></label>
+      <label class="check"><input type="checkbox" id="autoDims" checked> rozmery podľa terénu</label>
+      <div class="grid2" id="dims">
+        <label>polomer <input type="number" id="radius" step="1"></label>
+        <label>okraj <input type="number" id="edge" step="1"></label>
+        <label>nájazd <input type="number" id="length" step="1"></label>
+        <label>šírka <input type="number" id="width" step="1"></label>
+        <label>dopad <input type="number" id="drop" step="1"></label>
+        <label>otočenie ° <input type="number" id="rotate" value="0" step="15"></label>
+      </div>
+      <label class="check"><input type="checkbox" id="forceTerrain"> vynútiť (aj nepresný tvar)</label>
+      <p class="muted">Klikni do terénu. Obrys ukazuje, kam úprava siahne; skok sa natočí po smere trate.</p>
+    </div>
+
+    <div id="tool-objects" class="tool hidden">
+      <div id="selection" class="muted">Klikni na objekt (zelené krabice).</div>
+      <div class="row">
+        <button id="objUp" class="small" disabled>↑ 1 m</button>
+        <button id="objDown" class="small" disabled>↓ 1 m</button>
+        <button id="objRemove" class="small danger" disabled>Odstrániť</button>
+      </div>
+      <label class="check"><input type="checkbox" id="forceObjects"> aj herné pomocné objekty</label>
+      <p class="muted">Vybraný objekt posunieš ťahaním šípok. Delete ho odstráni (presunie pod horu aj s kolíziou).</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="row">
+      <button id="undo">Späť (Ctrl+Z)</button>
+      <span class="muted" id="undoInfo"></span>
+    </div>
+    <label>Uložiť ako <input type="text" id="output"></label>
+    <button id="save" class="primary">Uložiť upravenú hru</button>
+  </section>
+
+  <section>
+    <div id="log"></div>
+  </section>
+</aside>
+
+<main id="view"></main>
+<div id="tip" class="hidden"></div>
+<div id="busy" class="hidden"><div class="spinner"></div><span id="busyText">pracujem…</span></div>
+
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>

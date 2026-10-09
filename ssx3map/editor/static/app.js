@@ -1,0 +1,746 @@
+// SSX 3 map editor (three.js front end). The server does every edit; this page
+// only shows the course and turns clicks into edit requests.
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { TransformControls } from 'three/addons/controls/TransformControls.js';
+import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+
+const $ = (id) => document.getElementById(id);
+const CM = 100;          // game data is in centimetres, the page talks metres
+const SEG = 6;           // tessellation of one bicubic patch per side
+const SINK_LIMIT = 50000; // objects this far (cm) under the terrain were removed
+
+// ---------------------------------------------------------------- server API
+async function api(path, body) {
+  const opt = body === undefined ? {} : {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+  const res = await fetch(path, opt);
+  const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+function log(msg, cls = '') {
+  const div = document.createElement('div');
+  div.textContent = msg;
+  if (cls) div.className = cls;
+  $('log').prepend(div);
+}
+
+function busy(on, text = 'pracujem…') {
+  $('busy').classList.toggle('hidden', !on);
+  $('busyText').textContent = text;
+}
+
+// ---------------------------------------------------------------- three.js
+const view = $('view');
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+view.appendChild(renderer.domElement);
+const labelRenderer = new CSS2DRenderer();
+Object.assign(labelRenderer.domElement.style, { position: 'absolute', top: '0', left: '0', pointerEvents: 'none' });
+view.appendChild(labelRenderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xa9c2d6);
+scene.fog = new THREE.Fog(0xa9c2d6, 1500, 6000);
+const camera = new THREE.PerspectiveCamera(55, 1, 0.5, 20000);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.maxPolarAngle = Math.PI * 0.495;
+scene.add(new THREE.HemisphereLight(0xffffff, 0x50606f, 1.7));
+const sun = new THREE.DirectionalLight(0xffffff, 1.5);
+sun.position.set(0.5, 1, 0.35);
+scene.add(sun);
+
+const transform = new TransformControls(camera, renderer.domElement);
+transform.setSize(0.9);
+scene.add(transform);
+const proxy = new THREE.Object3D();
+scene.add(proxy);
+transform.addEventListener('dragging-changed', (e) => {
+  controls.enabled = !e.value;
+  if (!e.value) commitMove();
+});
+
+function resize() {
+  const w = view.clientWidth, h = view.clientHeight;
+  renderer.setSize(w, h);
+  labelRenderer.setSize(w, h);
+  camera.aspect = w / Math.max(1, h);
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+
+// ---------------------------------------------------------------- state
+const state = {
+  code: null, course: null, origin: [0, 0, 0], zmin: 0, zmax: 1,
+  terrain: new THREE.Group(), objects: null, overlay: new THREE.Group(), brush: new THREE.Group(),
+  tool: 'view', sel: null, index: null, line: null, textures: new Map(), framed: false,
+};
+scene.add(state.terrain, state.overlay, state.brush);
+
+const toScene = (p) => new THREE.Vector3((p[0] - state.origin[0]) / CM, (p[2] - state.origin[2]) / CM,
+  -(p[1] - state.origin[1]) / CM);
+const toGame = (v) => [v.x * CM + state.origin[0], -v.z * CM + state.origin[1], v.y * CM + state.origin[2]];
+
+// ---------------------------------------------------------------- patch maths (game space, cm)
+function evalPatch(c, u, v) {
+  const up = [1, u, u * u, u * u * u], vp = [1, v, v * v, v * v * v];
+  let x = 0, y = 0, z = 0;
+  for (let j = 0; j < 4; j++) for (let i = 0; i < 4; i++) {
+    const w = up[i] * vp[j], k = (j * 4 + i) * 3;
+    x += c[k] * w; y += c[k + 1] * w; z += c[k + 2] * w;
+  }
+  return [x, y, z];
+}
+
+function evalDerivs(c, u, v) {
+  const up = [1, u, u * u, u * u * u], vp = [1, v, v * v, v * v * v];
+  const dup = [0, 1, 2 * u, 3 * u * u], dvp = [0, 1, 2 * v, 3 * v * v];
+  const du = [0, 0, 0], dv = [0, 0, 0];
+  for (let j = 0; j < 4; j++) for (let i = 0; i < 4; i++) {
+    const k = (j * 4 + i) * 3, a = dup[i] * vp[j], b = up[i] * dvp[j];
+    for (let n = 0; n < 3; n++) { du[n] += c[k + n] * a; dv[n] += c[k + n] * b; }
+  }
+  return [du, dv];
+}
+
+const CELL = 3000;
+function buildIndex(patches) {
+  const cells = new Map();
+  const info = patches.map((p, n) => {
+    let lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    for (let a = 0; a <= 4; a++) for (let b = 0; b <= 4; b++) {
+      const q = evalPatch(p.c, a / 4, b / 4);
+      for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], q[k]); hi[k] = Math.max(hi[k], q[k]); }
+    }
+    const p00 = evalPatch(p.c, 0, 0), p10 = evalPatch(p.c, 1, 0), p01 = evalPatch(p.c, 0, 1);
+    const edge = (Math.hypot(p10[0] - p00[0], p10[1] - p00[1], p10[2] - p00[2]) +
+      Math.hypot(p01[0] - p00[0], p01[1] - p00[1], p01[2] - p00[2])) / 2;
+    for (let ix = Math.floor(lo[0] / CELL); ix <= Math.floor(hi[0] / CELL); ix++)
+      for (let iy = Math.floor(lo[1] / CELL); iy <= Math.floor(hi[1] / CELL); iy++) {
+        const key = ix + ',' + iy;
+        if (!cells.has(key)) cells.set(key, []);
+        cells.get(key).push(n);
+      }
+    return { lo, hi, edge, cx: (lo[0] + hi[0]) / 2, cy: (lo[1] + hi[1]) / 2 };
+  });
+  return { cells, info, patches };
+}
+
+function surfaceZ(x, y) {
+  const idx = state.index;
+  if (!idx) return null;
+  const list = idx.cells.get(Math.floor(x / CELL) + ',' + Math.floor(y / CELL)) || [];
+  let best = null;
+  for (const n of list) {
+    const inf = idx.info[n];
+    if (x < inf.lo[0] - 1 || x > inf.hi[0] + 1 || y < inf.lo[1] - 1 || y > inf.hi[1] + 1) continue;
+    const c = idx.patches[n].c;
+    let u = 0.5, v = 0.5;
+    for (let it = 0; it < 20; it++) {
+      const p = evalPatch(c, u, v);
+      const [du, dv] = evalDerivs(c, u, v);
+      const det = du[0] * dv[1] - dv[0] * du[1];
+      if (Math.abs(det) < 1e-9) break;
+      const rx = x - p[0], ry = y - p[1];
+      const su = (dv[1] * rx - dv[0] * ry) / det, sv = (du[0] * ry - du[1] * rx) / det;
+      u += su; v += sv;
+      if (Math.abs(su) + Math.abs(sv) < 1e-7) break;
+    }
+    if (u < -1e-3 || u > 1.001 || v < -1e-3 || v > 1.001) continue;
+    const p = evalPatch(c, Math.min(1, Math.max(0, u)), Math.min(1, Math.max(0, v)));
+    if (Math.abs(p[0] - x) < 2 && Math.abs(p[1] - y) < 2 && (best === null || p[2] > best)) best = p[2];
+  }
+  return best;
+}
+
+function localPatchSize(x, y) {
+  const idx = state.index;
+  const edges = [];
+  for (const inf of idx.info) if (Math.hypot(inf.cx - x, inf.cy - y) < 4000) edges.push(inf.edge);
+  if (!edges.length) return null;
+  edges.sort((a, b) => a - b);
+  return edges[edges.length >> 1] / CM;
+}
+
+// Same defaults as mapedit.shape_dims (metres).
+function shapeDims(unit) {
+  return { radius: Math.max(12, 2 * unit), edge: Math.max(5, 1.5 * unit), length: Math.max(20, 3 * unit),
+    width: Math.max(12, 2 * unit), drop: Math.max(8, 1.5 * unit) };
+}
+
+// ---------------------------------------------------------------- course line
+function makeLine(line) {
+  if (!line) return null;
+  const pts = line.pts, acc = [0];
+  for (let k = 1; k < pts.length; k++)
+    acc.push(acc[k - 1] + Math.hypot(pts[k][0] - pts[k - 1][0], pts[k][1] - pts[k - 1][1], pts[k][2] - pts[k - 1][2]));
+  return {
+    pts, acc, offset: line.offset, length: line.length,
+    at(d) {                                  // d: cm after the start
+      const t = this.offset + Math.max(0, d);
+      for (let k = 0; k < pts.length - 1; k++) {
+        if (t <= acc[k + 1] || k === pts.length - 2) {
+          const s = acc[k + 1] - acc[k], f = s ? Math.min(1, Math.max(0, (t - acc[k]) / s)) : 0;
+          const a = pts[k], b = pts[k + 1];
+          const h = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+          return { p: [0, 1, 2].map((i) => a[i] + (b[i] - a[i]) * f), h: [(b[0] - a[0]) / h, (b[1] - a[1]) / h] };
+        }
+      }
+      return { p: pts[pts.length - 1], h: [1, 0] };
+    },
+    nearest(x, y) {
+      let best = null;
+      for (let k = 0; k < pts.length - 1; k++) {
+        const a = pts[k], b = pts[k + 1], dx = b[0] - a[0], dy = b[1] - a[1], n = dx * dx + dy * dy;
+        const t = n ? Math.min(1, Math.max(0, ((x - a[0]) * dx + (y - a[1]) * dy) / n)) : 0;
+        const d = Math.hypot(a[0] + dx * t - x, a[1] + dy * t - y);
+        if (!best || d < best.off) {
+          const h = Math.sqrt(n) || 1;
+          best = { off: d, dist: acc[k] + t * (acc[k + 1] - acc[k]) - this.offset, h: [dx / h, dy / h] };
+        }
+      }
+      return best;
+    },
+  };
+}
+
+// ---------------------------------------------------------------- building the scene
+function disposeGroup(group) {
+  for (const child of [...group.children]) {
+    group.remove(child);
+    child.traverse?.((o) => {
+      o.geometry?.dispose?.();
+      if (o.element) o.element.remove();
+    });
+  }
+}
+
+const colouredMaterial = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+const lowColour = new THREE.Color(0x5b7d9c), highColour = new THREE.Color(0xf4f8fb);
+
+function textureFor(id) {
+  if (state.textures.has(id)) return state.textures.get(id);
+  const entry = { material: null, failed: false, waiting: [] };
+  state.textures.set(id, entry);
+  new THREE.TextureLoader().load(`/api/texture?id=${id}&code=${state.code}`, (tex) => {
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 4;
+    entry.material = new THREE.MeshLambertMaterial({ map: tex, side: THREE.DoubleSide });
+    for (const mesh of entry.waiting) if ($('showTextures').checked) mesh.material = entry.material;
+    entry.waiting = [];
+  }, undefined, () => { entry.failed = true; });
+  return entry;
+}
+
+function buildTerrain() {
+  disposeGroup(state.terrain);
+  const groups = new Map();
+  const { zmin, zmax } = state;
+  const col = new THREE.Color();
+  for (const p of state.course.patches) {
+    if (!groups.has(p.t)) groups.set(p.t, { pos: [], nrm: [], uv: [], col: [], idx: [] });
+    const g = groups.get(p.t);
+    const base = g.pos.length / 3;
+    const uvc = p.uv;     // corners (0,0), (0,1), (1,0), (1,1)
+    for (let b = 0; b <= SEG; b++) for (let a = 0; a <= SEG; a++) {
+      const u = a / SEG, v = b / SEG;
+      const q = evalPatch(p.c, u, v);
+      const [du, dv] = evalDerivs(p.c, u, v);
+      let n = [du[1] * dv[2] - du[2] * dv[1], du[2] * dv[0] - du[0] * dv[2], du[0] * dv[1] - du[1] * dv[0]];
+      if (n[2] < 0) n = n.map((x) => -x);
+      const len = Math.hypot(...n) || 1;
+      const s = toScene(q);
+      g.pos.push(s.x, s.y, s.z);
+      g.nrm.push(n[0] / len, n[2] / len, -n[1] / len);
+      g.uv.push(uvc[0] * (1 - u) * (1 - v) + uvc[4] * u * (1 - v) + uvc[2] * (1 - u) * v + uvc[6] * u * v,
+        uvc[1] * (1 - u) * (1 - v) + uvc[5] * u * (1 - v) + uvc[3] * (1 - u) * v + uvc[7] * u * v);
+      col.lerpColors(lowColour, highColour, Math.min(1, Math.max(0, (q[2] - zmin) / (zmax - zmin || 1))));
+      g.col.push(col.r, col.g, col.b);
+    }
+    for (let b = 0; b < SEG; b++) for (let a = 0; a < SEG; a++) {
+      const i0 = base + b * (SEG + 1) + a, i1 = i0 + 1, i2 = i0 + SEG + 1, i3 = i2 + 1;
+      g.idx.push(i0, i1, i2, i1, i3, i2);
+    }
+  }
+  for (const [tex, g] of groups) {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(g.pos, 3));
+    geo.setAttribute('normal', new THREE.Float32BufferAttribute(g.nrm, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(g.uv, 2));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(g.col, 3));
+    geo.setIndex(g.idx);
+    geo.computeBoundingSphere();
+    const mesh = new THREE.Mesh(geo, colouredMaterial);
+    mesh.userData.tex = tex;
+    state.terrain.add(mesh);
+    applyTexture(mesh);
+  }
+}
+
+function applyTexture(mesh) {
+  if (!$('showTextures').checked || mesh.userData.tex < 0) { mesh.material = colouredMaterial; return; }
+  const entry = textureFor(mesh.userData.tex);
+  if (entry.material) mesh.material = entry.material;
+  else { mesh.material = colouredMaterial; if (!entry.failed) entry.waiting.push(mesh); }
+}
+
+function visibleObjects() {
+  const show = $('showObjects').checked, helpers = $('showHelpers').checked;
+  return state.course.objects.filter((o) => show && (helpers || !o.p) && o.lo[2] > state.zmin - SINK_LIMIT);
+}
+
+function buildObjects() {
+  if (state.objects) { scene.remove(state.objects); state.objects.geometry.dispose(); state.objects = null; }
+  const list = visibleObjects();
+  if (!list.length) return;
+  const mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1),
+    new THREE.MeshLambertMaterial({ transparent: true, opacity: 0.6 }), list.length);
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), colour = new THREE.Color();
+  list.forEach((o, i) => {
+    const centre = toScene([(o.lo[0] + o.hi[0]) / 2, (o.lo[1] + o.hi[1]) / 2, (o.lo[2] + o.hi[2]) / 2]);
+    const size = new THREE.Vector3(Math.max(0.3, (o.hi[0] - o.lo[0]) / CM), Math.max(0.3, (o.hi[2] - o.lo[2]) / CM),
+      Math.max(0.3, (o.hi[1] - o.lo[1]) / CM));
+    mesh.setMatrixAt(i, m.compose(centre, q, size));
+    colour.set(state.sel && state.sel.k === o.k ? 0xffeb3b : o.p ? 0xff9800 : 0x2e9d48);
+    mesh.setColorAt(i, colour);
+  });
+  mesh.instanceMatrix.needsUpdate = true;
+  mesh.instanceColor.needsUpdate = true;
+  mesh.userData.list = list;
+  state.objects = mesh;
+  scene.add(mesh);
+}
+
+function label(text, cls, pos) {
+  const div = document.createElement('div');
+  div.className = 'label3d ' + cls;
+  div.textContent = text;
+  const obj = new CSS2DObject(div);
+  obj.position.copy(pos);
+  return obj;
+}
+
+function buildOverlay() {
+  disposeGroup(state.overlay);
+  const c = state.course;
+  if (state.line) {
+    const pts = state.line.pts.map((p) => toScene([p[0], p[1], p[2] + 60]));
+    state.overlay.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),
+      new THREE.LineBasicMaterial({ color: 0xff5252 })));
+    const step = state.line.length > 60000 ? 10000 : 1000;
+    for (let d = 0; d <= state.line.length; d += step) {
+      const { p } = state.line.at(d);
+      const pos = toScene([p[0], p[1], p[2] + 150]);
+      const dot = new THREE.Mesh(new THREE.SphereGeometry(0.8, 8, 6), new THREE.MeshBasicMaterial({ color: 0xff5252 }));
+      dot.position.copy(pos);
+      state.overlay.add(dot, label(`${Math.round(d / CM)} m`, 'mark', pos));
+    }
+  }
+  for (const r of c.regions) {
+    const pos = toScene([r.p[0], r.p[1], r.p[2] + 100]);
+    const colour = r.kind === 0 ? 0x00e676 : 0x40c4ff;
+    const ball = new THREE.Mesh(new THREE.SphereGeometry(r.kind === 0 ? 1 : 1.4, 10, 8),
+      new THREE.MeshBasicMaterial({ color: colour }));
+    ball.position.copy(pos);
+    state.overlay.add(ball);
+    if (r.kind === 1) state.overlay.add(label(`S${r.slot}`, 'session', pos));
+    else if (r.slot === 0) state.overlay.add(label('ŠTART', 'start', pos));
+  }
+  if ($('showRails').checked) {
+    const mat = new THREE.LineBasicMaterial({ color: 0xe040fb });
+    for (const rail of c.rails) {
+      if (rail.pts.length < 2) continue;
+      state.overlay.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(rail.pts.map(toScene)), mat));
+    }
+  }
+}
+
+// ---------------------------------------------------------------- loading
+async function loadCourse(code, keepView) {
+  busy(true, 'načítavam trať…');
+  try {
+    const course = await api(`/api/course?code=${encodeURIComponent(code)}`);
+    if (code !== state.code) state.textures.clear();
+    state.code = code;
+    state.course = course;
+    if (!keepView || !state.framed) {
+      let lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+      for (const p of course.patches) for (const k of [0, 1, 2]) {
+        lo[k] = Math.min(lo[k], p.c[k]); hi[k] = Math.max(hi[k], p.c[k]);   // constant terms: P(0,0)
+      }
+      state.origin = [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, lo[2]];
+      state.zmin = lo[2]; state.zmax = hi[2];
+    }
+    state.line = makeLine(course.line);
+    state.index = buildIndex(course.patches);
+    buildTerrain();
+    buildObjects();
+    buildOverlay();
+    const len = state.line ? state.line.length / CM : 0;
+    $('along').max = Math.max(10, Math.round(len));
+    $('courseInfo').textContent = `${course.name}: ${course.locations.join(', ')} · ${course.patches.length} plátov, ` +
+      `${course.objects.length} objektov` + (len ? ` · trať ${Math.round(len)} m` : '');
+    updateUndo(course.undo);
+    if (!keepView || !state.framed) { flyAlong(0); state.framed = true; }
+    if (state.sel) reselect();
+  } catch (e) {
+    log(e.message, 'err');
+  } finally {
+    busy(false);
+  }
+}
+
+function updateUndo(list) {
+  $('undo').disabled = !list.length;
+  $('undoInfo').textContent = list.length ? `posledné: ${list[list.length - 1]}` : 'žiadne úpravy';
+}
+
+function flyAlong(metres) {
+  $('along').value = metres;
+  $('alongLabel').textContent = `${Math.round(metres)} m`;
+  let target, heading;
+  if (state.line) {
+    const { p, h } = state.line.at(metres * CM);
+    target = toScene(p); heading = new THREE.Vector3(h[0], 0, -h[1]);
+  } else {
+    target = new THREE.Vector3(0, (state.zmax - state.zmin) / CM / 2, 0); heading = new THREE.Vector3(1, 0, 0);
+  }
+  controls.target.copy(target);
+  camera.position.copy(target).addScaledVector(heading, -90).add(new THREE.Vector3(0, 45, 0));
+  controls.update();
+}
+
+// ---------------------------------------------------------------- picking
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+
+function setPointer(e) {
+  const r = renderer.domElement.getBoundingClientRect();
+  pointer.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+  raycaster.setFromCamera(pointer, camera);
+}
+
+function hitTerrain() {
+  const hits = raycaster.intersectObjects(state.terrain.children, false);
+  return hits.length ? hits[0].point : null;
+}
+
+function hitObject() {
+  if (!state.objects) return null;
+  const hits = raycaster.intersectObject(state.objects, false);
+  if (!hits.length) return null;
+  return state.objects.userData.list[hits[0].instanceId];
+}
+
+// ---------------------------------------------------------------- terrain brush
+function brushParams(x, y) {
+  const unit = localPatchSize(x, y) || 10;
+  const auto = shapeDims(unit);
+  const dims = {};
+  for (const k of ['radius', 'edge', 'length', 'width', 'drop']) {
+    const v = parseFloat($(k).value);
+    dims[k] = $('autoDims').checked || !(v > 0) ? auto[k] : v;
+    if ($('autoDims').checked) $(k).value = auto[k].toFixed(0);
+  }
+  let h = state.line ? state.line.nearest(x, y).h : [1, 0];
+  const a = (parseFloat($('rotate').value) || 0) * Math.PI / 180;
+  h = [h[0] * Math.cos(a) - h[1] * Math.sin(a), h[0] * Math.sin(a) + h[1] * Math.cos(a)];
+  return { dims, heading: h, unit };
+}
+
+function drapedLoop(points, colour, fallbackZ) {
+  let last = fallbackZ;
+  const out = points.map(([x, y]) => {
+    const z = surfaceZ(x, y);
+    if (z !== null) last = z;          // off the terrain: keep the last height instead of dropping
+    return toScene([x, y, last + 40]);
+  });
+  return new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(out), new THREE.LineBasicMaterial({ color: colour }));
+}
+
+function drapedFan(cx, cy, points, colour, fallbackZ) {
+  // A translucent filled footprint, drawn over the terrain so it never hides.
+  const zc = surfaceZ(cx, cy) ?? fallbackZ;
+  const centre = toScene([cx, cy, zc + 40]);
+  let last = zc;
+  const ring = points.map(([x, y]) => {
+    const z = surfaceZ(x, y);
+    if (z !== null) last = z;
+    return toScene([x, y, last + 40]);
+  });
+  const pos = [];
+  for (let k = 0; k < ring.length; k++) {
+    const a = ring[k], b = ring[(k + 1) % ring.length];
+    pos.push(centre.x, centre.y, centre.z, a.x, a.y, a.z, b.x, b.y, b.z);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: colour, transparent: true, opacity: 0.22,
+    depthTest: false, side: THREE.DoubleSide }));
+  mesh.renderOrder = 10;
+  return mesh;
+}
+
+function circle(x, y, r) {
+  const pts = [];
+  for (let k = 0; k < 64; k++) { const a = (k / 64) * Math.PI * 2; pts.push([x + r * Math.cos(a), y + r * Math.sin(a)]); }
+  return pts;
+}
+
+function rect(x, y, h, back, front, half) {
+  const f = h, r = [h[1], -h[0]];
+  const at = (along, side) => [x + along * f[0] + side * r[0], y + along * f[1] + side * r[1]];
+  const pts = [];
+  const n = 16;
+  for (let k = 0; k <= n; k++) pts.push(at(-back + (back + front) * k / n, -half));
+  for (let k = 0; k <= n; k++) pts.push(at(front, -half + 2 * half * k / n));
+  for (let k = 0; k <= n; k++) pts.push(at(front - (back + front) * k / n, half));
+  for (let k = 0; k <= n; k++) pts.push(at(-back, half - 2 * half * k / n));
+  return pts;
+}
+
+function updateBrush(game) {
+  disposeGroup(state.brush);
+  if (!game || state.tool !== 'terrain') return;
+  const [x, y, z] = game;
+  const { dims, heading } = brushParams(x, y);
+  const shape = $('shape').value;
+  const m = (v) => v * CM;
+  if (shape === 'kicker') {
+    const along = (dims.drop - dims.length) / 2;      // centre of the footprint for the fan
+    const fx = x + m(along) * heading[0], fy = y + m(along) * heading[1];
+    state.brush.add(drapedFan(fx, fy, rect(x, y, heading, m(dims.length), m(dims.drop), m(dims.width / 2)),
+      parseFloat($('height').value) < 0 ? 0x40c4ff : 0xffeb3b, z));
+    state.brush.add(drapedLoop(rect(x, y, heading, m(dims.length), m(dims.drop), m(dims.width / 2)), 0xffeb3b, z));
+    state.brush.add(drapedLoop(rect(x, y, heading, m(dims.length), m(dims.drop), m(dims.width / 2 + dims.edge)),
+      0xffa000, z));
+    state.brush.add(drapedLoop(rect(x, y, heading, 0, m(1), m(dims.width / 2)), 0xff1744, z));   // the lip
+  } else {
+    state.brush.add(drapedFan(x, y, circle(x, y, m(dims.radius)),
+      parseFloat($('height').value) < 0 ? 0x40c4ff : 0xffeb3b, z));
+    state.brush.add(drapedLoop(circle(x, y, m(dims.radius)), 0xffeb3b, z));
+    if (shape !== 'bump') state.brush.add(drapedLoop(circle(x, y, m(dims.radius + dims.edge)), 0xffa000, z));
+  }
+}
+
+async function applyTerrain(game) {
+  const [x, y] = game;
+  const { heading } = brushParams(x, y);
+  const body = { code: state.code, x, y, heading, shape: $('shape').value, height: parseFloat($('height').value),
+    force: $('forceTerrain').checked };
+  if (!$('autoDims').checked) for (const k of ['radius', 'edge', 'length', 'width', 'drop']) body[k] = parseFloat($(k).value) || null;
+  busy(true, 'upravujem terén…');
+  try {
+    const res = await api('/api/terrain', body);
+    log(res.message, 'ok');
+    await loadCourse(state.code, true);
+  } catch (e) {
+    log(e.message, 'err');
+  } finally {
+    busy(false);
+  }
+}
+
+// ---------------------------------------------------------------- objects
+function select(obj) {
+  state.sel = obj ? { k: obj.k } : null;
+  transform.detach();
+  if (obj) {
+    proxy.position.copy(toScene([(obj.lo[0] + obj.hi[0]) / 2, (obj.lo[1] + obj.hi[1]) / 2, (obj.lo[2] + obj.hi[2]) / 2]));
+    state.sel.start = proxy.position.clone();
+    transform.attach(proxy);
+    const size = [0, 1, 2].map((k) => ((obj.hi[k] - obj.lo[k]) / CM).toFixed(1)).join(' × ');
+    $('selection').innerHTML = '';
+    $('selection').append(Object.assign(document.createElement('b'), { textContent: obj.n }),
+      document.createElement('br'),
+      `x ${(((obj.lo[0] + obj.hi[0]) / 2) / CM).toFixed(1)} m, y ${(((obj.lo[1] + obj.hi[1]) / 2) / CM).toFixed(1)} m, ` +
+      `rozmer ${size} m` + (obj.p ? ' · herný pomocný objekt' : ''));
+  } else {
+    $('selection').textContent = 'Klikni na objekt (zelené krabice).';
+  }
+  for (const id of ['objUp', 'objDown', 'objRemove']) $(id).disabled = !obj;
+  buildObjects();
+}
+
+function reselect() {
+  const obj = state.course.objects.find((o) => o.k === state.sel.k);
+  select(obj && obj.lo[2] > state.zmin - SINK_LIMIT ? obj : null);
+}
+
+async function objectAction(action, delta) {
+  if (!state.sel) return;
+  busy(true, 'upravujem objekt…');
+  try {
+    const res = await api('/api/objects', { code: state.code, action, keys: [state.sel.k], delta,
+      force: $('forceObjects').checked });
+    log(res.message, 'ok');
+  } catch (e) {
+    log(e.message, 'err');
+  } finally {
+    busy(false);
+  }
+  await loadCourse(state.code, true);
+}
+
+function commitMove() {
+  if (!state.sel || !state.sel.start) return;
+  const d = proxy.position.clone().sub(state.sel.start);
+  if (d.length() < 0.01) return;
+  objectAction('move', [d.x * CM, -d.z * CM, d.y * CM]);
+}
+
+// ---------------------------------------------------------------- input
+let down = null;
+let lastMove = null;
+renderer.domElement.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY }; });
+renderer.domElement.addEventListener('pointerup', (e) => {
+  if (!down) return;
+  const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
+  down = null;
+  if (moved > 5 || transform.dragging || transform.axis) return;
+  setPointer(e);
+  if (state.tool === 'terrain') {
+    const p = hitTerrain();
+    if (p) applyTerrain(toGame(p));
+  } else if (state.tool === 'objects') {
+    select(hitObject());
+  }
+});
+renderer.domElement.addEventListener('pointermove', (e) => { lastMove = e; });
+renderer.domElement.addEventListener('pointerleave', () => { lastMove = null; $('tip').classList.add('hidden'); });
+
+function hover() {
+  if (!lastMove || !state.course || transform.dragging) return;
+  const e = lastMove;
+  lastMove = null;
+  setPointer(e);
+  const tip = $('tip');
+  let text = null;
+  const obj = state.tool !== 'terrain' ? hitObject() : null;
+  if (obj) text = obj.n;
+  else {
+    const p = hitTerrain();
+    if (p) {
+      const g = toGame(p);
+      text = `x ${(g[0] / CM).toFixed(1)}  y ${(g[1] / CM).toFixed(1)}  výška ${(g[2] / CM).toFixed(1)} m`;
+      if (state.line) {
+        const n = state.line.nearest(g[0], g[1]);
+        text += ` · ${Math.round(n.dist / CM)} m od štartu, ${Math.round(n.off / CM)} m od trate`;
+      }
+      updateBrush(g);
+    } else updateBrush(null);
+  }
+  tip.classList.toggle('hidden', !text);
+  if (text) {
+    const r = view.getBoundingClientRect();
+    tip.textContent = text;
+    tip.style.left = `${e.clientX - r.left + 316}px`;
+    tip.style.top = `${e.clientY - r.top + 14}px`;
+  }
+}
+
+window.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); }
+  else if ((e.key === 'Delete' || e.key === 'Backspace') && state.sel) objectAction('remove');
+  else if (e.key === 'Escape') select(null);
+});
+
+for (const tab of document.querySelectorAll('.tab')) {
+  tab.addEventListener('click', () => {
+    state.tool = tab.dataset.tool;
+    for (const t of document.querySelectorAll('.tab')) t.classList.toggle('active', t === tab);
+    for (const t of document.querySelectorAll('.tool')) t.classList.toggle('hidden', t.id !== `tool-${state.tool}`);
+    if (state.tool !== 'objects') select(null);
+    updateBrush(null);
+  });
+}
+
+$('autoDims').addEventListener('change', () => {
+  $('dims').classList.toggle('disabled', $('autoDims').checked);
+  for (const k of ['radius', 'edge', 'length', 'width', 'drop']) $(k).disabled = $('autoDims').checked;
+});
+$('autoDims').dispatchEvent(new Event('change'));
+$('showTextures').addEventListener('change', () => state.terrain.children.forEach(applyTexture));
+$('showObjects').addEventListener('change', () => { select(null); buildObjects(); });
+$('showHelpers').addEventListener('change', () => { select(null); buildObjects(); });
+$('showRails').addEventListener('change', buildOverlay);
+$('along').addEventListener('input', () => flyAlong(parseFloat($('along').value)));
+$('toStart').addEventListener('click', () => flyAlong(0));
+$('course').addEventListener('change', () => { select(null); state.framed = false; loadCourse($('course').value, false); });
+$('objUp').addEventListener('click', () => objectAction('move', [0, 0, 100]));
+$('objDown').addEventListener('click', () => objectAction('move', [0, 0, -100]));
+$('objRemove').addEventListener('click', () => objectAction('remove'));
+$('undo').addEventListener('click', undo);
+$('save').addEventListener('click', save);
+
+async function undo() {
+  try {
+    const res = await api('/api/undo', {});
+    log(res.message, 'ok');
+    await loadCourse(state.code, true);
+  } catch (e) {
+    log(e.message, 'err');
+  }
+}
+
+async function save() {
+  busy(true, 'ukladám upravenú hru… (kopírovanie ISO môže trvať aj minútu)');
+  try {
+    const res = await api('/api/save', { output: $('output').value });
+    log(res.message, 'ok');
+  } catch (e) {
+    log(e.message, 'err');
+  } finally {
+    busy(false);
+  }
+}
+
+// ---------------------------------------------------------------- start
+const LABEL_RANGE = 600;     // metres; farther labels only clutter the view
+function cullLabels() {
+  for (const o of state.overlay.children) {
+    if (o.isCSS2DObject) o.visible = o.position.distanceTo(camera.position) < LABEL_RANGE;
+  }
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  hover();
+  cullLabels();
+  controls.update();
+  renderer.render(scene, camera);
+  labelRenderer.render(scene, camera);
+}
+
+async function start() {
+  resize();
+  animate();
+  try {
+    const info = await api('/api/info');
+    $('output').value = info.output;
+    for (const c of info.courses) {
+      const opt = document.createElement('option');
+      opt.value = c.code;
+      opt.textContent = `${c.name} (${c.code})`;
+      $('course').append(opt);
+    }
+    const first = info.courses.find((c) => c.code === 'ARA1') || info.courses[0];
+    if (!first) { log('v dátach nie je žiadna známa trať', 'err'); return; }
+    $('course').value = first.code;
+    log(`otvorené: ${info.source}`);
+    await loadCourse(first.code, false);
+  } catch (e) {
+    log(e.message, 'err');
+  }
+}
+
+window.ssxEditor = {                                          // for debugging and tests
+  state, api, loadCourse, flyAlong,
+  project: (x, y, z) => new THREE.Vector3(x, y, z).project(camera),
+};
+start();

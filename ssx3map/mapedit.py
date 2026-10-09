@@ -334,3 +334,79 @@ def svg_map(world, code, objects=True, size=1800):
                f'štart a session (reset) body · najeď myšou na plochu pre súradnice</text>')
     out.append('</svg>')
     return '\n'.join(out)
+
+
+# --------------------------------------------------------------------------
+# Edit operations shared by the command line and the browser editor
+# --------------------------------------------------------------------------
+
+SHAPES = ('bump', 'plateau', 'kicker', 'flatten')
+PROTECTED = ('trig', 'reset', 'fence', 'collide', 'nis_', 'transport', 'lodge', 'skybox', 'load', 'finish', 'start')
+SINK = -100000.0        # removing an object = moving it 1 km under the mountain
+
+
+class EditRefused(ValueError):
+    pass
+
+
+def is_protected(name):
+    return any(k in name.lower() for k in PROTECTED)
+
+
+def course_chunks(world, code):
+    return [main_chunk(loc) for loc in course_locations(world, code)]
+
+
+def shape_dims(unit, radius=None, edge=None, length=None, width=None, drop=None):
+    """Shape sizes in metres; missing ones scale with the local patch size `unit` (m)."""
+    return dict(radius=radius or max(12.0, 2.0 * unit), edge=edge or max(5.0, 1.5 * unit),
+                length=length or max(20.0, 3.0 * unit), width=width or max(12.0, 2.0 * unit),
+                drop=drop or max(8.0, 1.5 * unit))
+
+
+def make_field(shape, frame, z, height, dims):
+    """Height field (cm) for `shape`; `height` and `dims` in metres, `z` the surface height (cm)."""
+    h = height * CM
+    if shape == 'bump':
+        return terrain.bump(frame, h, dims['radius'] * CM)
+    if shape == 'plateau':
+        return terrain.plateau(frame, h, dims['radius'] * CM, dims['edge'] * CM)
+    if shape == 'kicker':
+        return terrain.kicker(frame, h, dims['length'] * CM, dims['width'] * CM, dims['drop'] * CM,
+                              dims['edge'] * CM)
+    if shape == 'flatten':
+        if z is None:
+            raise EditRefused('flatten needs a point on the terrain')
+        return terrain.flatten_to(frame, z + h, dims['radius'] * CM, dims['edge'] * CM)
+    raise EditRefused(f'unknown shape {shape!r}')
+
+
+def terrain_edit(world, code, frame, z, shape, height, force=False, carry=True, **sizes):
+    """Apply one terrain shape; on refusal the world is left exactly as it was.
+
+    Returns (report, dims, unit). Refuses heights over 60 m, edits that touch no
+    patch, and shapes the local patches cannot represent (error > 15 % of the height)."""
+    if abs(height) > 60 and not force:
+        raise EditRefused('heights beyond 60 m are refused without force')
+    local = local_patch_size(world, code, frame)
+    if local is None:
+        raise EditRefused('no terrain near that place')
+    unit = local / CM
+    dims = shape_dims(unit, **sizes)
+    dz = make_field(shape, frame, z, height, dims)
+    snap = world.stream.snapshot(course_chunks(world, code))
+    report = apply_field(world, code, frame, dz, carry_objects=carry, move_points=carry)
+    if not report.patches:
+        world.stream.restore(snap)
+        raise EditRefused('no terrain patch was changed (the place is off the terrain, or the shape falls '
+                          'between the sample points of one patch)')
+    allowed = max(30.0, 0.15 * abs(height) * CM)      # 15 % of the requested height, at least 30 cm
+    if report.shape_error > allowed and not force:
+        world.stream.restore(snap)
+        raise EditRefused(f'the terrain here (patches of about {unit:.0f} m) cannot hold this shape: it would be '
+                          f'off by up to {report.shape_error / CM:.2f} m; make it larger or force it')
+    return report, dims, unit
+
+
+def move_object(world, chunk, offset, d):
+    instances.translate(world.stream.chunk(chunk), offset, *d)

@@ -147,7 +147,7 @@ def decode_rgba(data):
     return w, h, bytes(out)
 
 
-def write_png(path, width, height, rgba):
+def encode_png(width, height, rgba, level=6):
     if len(rgba) != width * height * 4:
         raise ValueError('PNG payload size mismatch')
     raw = b''.join(b'\0' + rgba[y * width * 4:(y + 1) * width * 4] for y in range(height))
@@ -155,7 +155,10 @@ def write_png(path, width, height, rgba):
     def chunk(tag, body):
         return struct.pack('>I', len(body)) + tag + body + struct.pack('>I', zlib.crc32(tag + body) & 0xFFFFFFFF)
 
-    png = (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 6, 0, 0, 0))
-           + chunk(b'IDAT', zlib.compress(raw, 9)) + chunk(b'IEND', b''))
+    return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 6, 0, 0, 0))
+            + chunk(b'IDAT', zlib.compress(raw, level)) + chunk(b'IEND', b''))
+
+
+def write_png(path, width, height, rgba):
     with open(path, 'wb') as f:
-        f.write(png)
+        f.write(encode_png(width, height, rgba, level=9))
