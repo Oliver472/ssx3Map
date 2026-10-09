@@ -30,6 +30,11 @@ farby, hodnoty, palety.
 Python 3.8 alebo novší, bez ďalších knižníc. Príkazy spúšťaj z priečinka
 tohto repozitára.
 
+- **macOS / Linux:** píš `python3` namiesto `python`. Ak chýba, na Macu ho
+  nainštaluje `xcode-select --install` (alebo `brew install python`).
+- **Windows:** nainštaluj Python z python.org a zaškrtni „Add python.exe to
+  PATH“. Potom funguje `python` (alebo `py`).
+
 ## 1. Report
 
 Rozbaľ `SSX 3 (USA).7z`, aby si mal `.iso`. Potom spusti:
