@@ -1,0 +1,12 @@
+# Game data never goes into the repository.
+*.iso
+*.ISO
+*.BIG
+*.big
+*.7z
+*.bin
+*.png
+report*.txt
+report*.json
+__pycache__/
+*.pyc
