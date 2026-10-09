@@ -165,12 +165,16 @@ class World:
     # -- saving ---------------------------------------------------------------
     def save(self, output, progress=None):
         """Write the edited world. Returns the per-block re-encode report."""
+        if os.path.abspath(output) == os.path.abspath(self.source):
+            raise ValueError('refusing to overwrite the input; choose another output path')
         image, report = self.stream.build(progress=progress)
+        if progress:
+            progress('verifying the re-encoded chunks')
         self.stream.verify(image)
         self.big.replace(self.ssb_entry, image)
         payload = self.big.to_bytes()
-        if os.path.abspath(output) == os.path.abspath(self.source):
-            raise ValueError('refusing to overwrite the input; choose another output path')
+        if progress:
+            progress(f'writing {output}')
         if self.is_iso:
             iso9660.replace_file(self.source, BIG_PATH, payload, output_path=output)
         else:

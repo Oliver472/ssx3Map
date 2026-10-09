@@ -77,6 +77,16 @@ class Patch:
         vp = (1.0, v, v * v, v * v * v)
         return tuple(sum(self.c[j][i][k] * up[i] * vp[j] for j in range(4) for i in range(4)) for k in range(3))
 
+    def normal(self, u, v):
+        """Unit surface normal at (u, v) (from the analytic partial derivatives)."""
+        up, vp = (1.0, u, u * u, u * u * u), (1.0, v, v * v, v * v * v)
+        dup, dvp = (0.0, 1.0, 2 * u, 3 * u * u), (0.0, 1.0, 2 * v, 3 * v * v)
+        du = [sum(self.c[j][i][k] * dup[i] * vp[j] for j in range(4) for i in range(4)) for k in range(3)]
+        dv = [sum(self.c[j][i][k] * up[i] * dvp[j] for j in range(4) for i in range(4)) for k in range(3)]
+        n = (du[1] * dv[2] - du[2] * dv[1], du[2] * dv[0] - du[0] * dv[2], du[0] * dv[1] - du[1] * dv[0])
+        length = math.sqrt(sum(x * x for x in n)) or 1.0
+        return tuple(x / length for x in n)
+
     def corners(self):
         return {(u, v): self.point(u, v) for u in (0.0, 1.0) for v in (0.0, 1.0)}
 

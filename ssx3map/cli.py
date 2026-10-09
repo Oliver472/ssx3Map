@@ -317,6 +317,8 @@ def cmd_build(args):
         print(f'mapa novej trate: {args.map}')
     if not done:
         raise SystemExit('no step could be applied; nothing written')
+    print(f'ukladám {args.output} (prekódovanie blokov a kópia ISO, pár minút)…', flush=True)
+    args.verbose = True
     _save(args, w)
 
 

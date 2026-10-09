@@ -566,7 +566,9 @@ UNTOUCHED = {13: 'zvukové spúšťače', 16: 'skripty scén', 19: 'misie', 22: 
 class WarpReport:
     patches: int = 0
     max_move: float = 0.0
-    shape_error: float = 0.0
+    shape_error: float = 0.0        # cm, worst distance of the surface from the wanted one (along its normal)
+    slip: float = 0.0               # cm, worst slide of a surface point along the surface
+    sideways: str = 'bilinear'      # how the patches were moved sideways
     stretch: float = 1.0
     objects: int = 0
     objects_bent: list = field(default_factory=list)
@@ -587,7 +589,7 @@ class WarpReport:
     untouched: list = field(default_factory=list)
 
 
-def apply_warp(world, code, grab):
+def apply_warp(world, code, grab, sideways='bilinear'):
     report = WarpReport()
     frame, reach = grab.frame, grab.reach
     course = mapedit.course_aip(world, code)
@@ -609,15 +611,22 @@ def apply_warp(world, code, grab):
                 if not mapedit._near(frame, reach, *before.bbox):
                     continue
                 buf = world.stream.chunk(c)
-                moved = terrain.displace(buf, rec.offset, grab, sideways='bilinear')
+                moved = terrain.displace(buf, rec.offset, grab, sideways=sideways)
                 if moved:
                     report.patches += 1
                     report.max_move = max(report.max_move, moved)
                     after = terrain.Patch(buf[rec.offset:rec.offset + rec.size])
+                    # A point that slid along the surface leaves its shape alone (only the texture
+                    # stretches a little); what counts is how far the surface itself is off,
+                    # measured along its normal.
                     for u in (0.1, 0.3, 0.5, 0.7, 0.9):
                         for v in (0.1, 0.3, 0.5, 0.7, 0.9):
                             want = grab.apply(before.point(u, v))
-                            report.shape_error = max(report.shape_error, math.dist(after.point(u, v), want))
+                            got = after.point(u, v)
+                            n = after.normal(u, v)
+                            off = abs(sum((got[k] - want[k]) * n[k] for k in range(3)))
+                            report.shape_error = max(report.shape_error, off)
+                            report.slip = max(report.slip, math.dist(got, want))
             elif kind in (3, 5) and rec.size >= instances.LAYOUTS[kind]['size']:
                 lay = instances.LAYOUTS[kind]
                 lo = struct.unpack_from('<3f', data, rec.offset + lay['lo'])
@@ -698,18 +707,21 @@ def warp_edit(world, code, grab, force=False):
         raise mapedit.EditRefused(f'the edge would squeeze the ground to {stretch:.0%} of its size; make the edge '
                                   f'wider (about {grab.size / 0.4 / 100:.0f} m for this move) or force it')
     snap = world.stream.snapshot(mapedit.course_chunks(world, code))
-    try:
-        report = apply_warp(world, code, grab)
-    except Exception:
-        world.stream.restore(snap)
-        raise
-    report.stretch = stretch
-    if not report.patches:
-        world.stream.restore(snap)
-        raise mapedit.EditRefused('no terrain patch was moved (the place is off the terrain)')
     allowed = max(50.0, 0.15 * grab.size)
-    if report.shape_error > allowed and not force:
+    # Bilinear sideways moves rewrite the fewest bytes; where the ground bends too much
+    # for them, refit the patches fully (more exact, more bytes).
+    for sideways in ('bilinear', 'cubic'):
+        try:
+            report = apply_warp(world, code, grab, sideways=sideways)
+        except Exception:
+            world.stream.restore(snap)
+            raise
+        report.stretch, report.sideways = stretch, sideways
+        if not report.patches:
+            world.stream.restore(snap)
+            raise mapedit.EditRefused('no terrain patch was moved (the place is off the terrain)')
+        if report.shape_error <= allowed or force:
+            return report
         world.stream.restore(snap)
-        raise mapedit.EditRefused(f'the patches here cannot follow this bend: they would be off by up to '
-                                  f'{report.shape_error / 100:.2f} m; make the edge wider or force it')
-    return report
+    raise mapedit.EditRefused(f'the patches here cannot follow this bend: they would be off by up to '
+                              f'{report.shape_error / 100:.2f} m; make the edge wider or force it')

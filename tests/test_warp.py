@@ -101,13 +101,15 @@ class WarpCourseTest(unittest.TestCase):
         # Terrain: every patch follows the field (within the reported fit error).
         self.assertGreater(report.patches, 20)
         self.assertLess(report.shape_error, 25.0)
+        self.assertEqual(report.sideways, 'bilinear')
         for r in recs:
             if r.kind != 1:
                 continue
             p0 = terrain.Patch(before[r.offset:r.offset + r.size])
             p1 = terrain.Patch(after[r.offset:r.offset + r.size])
             for u, v in ((0.0, 0.0), (0.5, 0.5), (1.0, 0.3)):
-                self.assertLess(math.dist(p1.point(u, v), g.apply(p0.point(u, v))), report.shape_error + 0.1)
+                self.assertLess(math.dist(p1.point(u, v), g.apply(p0.point(u, v))), report.slip + 0.1)
+        self.assertLessEqual(report.shape_error, report.slip)
         # The tree under the grab moves 3 m with its box; the far one stays.
         r, old, new = pair(3, 0)
         i0, i1 = instances.Instance(old), instances.Instance(new)
@@ -239,6 +241,31 @@ class WarpCourseTest(unittest.TestCase):
         self.assertEqual(w.stream.changed_chunks(), [])
         report = warp.warp_edit(w, 'AAA', self.grab(move=(700.0, 0.0, 0.0), edge=1500.0), force=True)
         self.assertLess(report.stretch, warp.MIN_STRETCH)
+
+    def test_bends_too_sharp_for_bilinear_are_refitted(self):
+        # A full refit follows a sharp turn at least as well as the bilinear move...
+        g = warp.Grab((1500.0, 2500.0), (0.0, 0.0, 0.0), 300.0, 2000.0, turn=35.0)
+        errors = {}
+        for mode in ('bilinear', 'cubic'):
+            w = self.world()
+            errors[mode] = warp.apply_warp(w, 'AAA', g, sideways=mode).shape_error
+        self.assertLessEqual(errors['cubic'], errors['bilinear'] + 1e-6)
+        # ...and warp_edit falls back to it when the bilinear move is off by too much.
+        real = warp.apply_warp
+
+        def strict(world, code, grab, sideways='bilinear'):
+            report = real(world, code, grab, sideways)
+            if sideways == 'bilinear':
+                report.shape_error = 1e9
+            return report
+        warp.apply_warp = strict
+        try:
+            w = self.world()
+            report = warp.warp_edit(w, 'AAA', self.grab())
+        finally:
+            warp.apply_warp = real
+        self.assertEqual(report.sideways, 'cubic')
+        self.assertTrue(w.stream.changed_chunks())
 
     def test_refuses_off_the_terrain(self):
         w = self.world()
