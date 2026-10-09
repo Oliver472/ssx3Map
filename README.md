@@ -115,7 +115,12 @@ python3 -m ssx3map map "SSX 3 (USA).iso" --location ARA1 -o snowjam.svg
 - `--along 250`: 250 m od štartu po trase,
 - `--side 6`: posun 6 m doprava od tohto bodu (záporné číslo je doľava),
 - `--at X Y`: súradnice v metroch z mapy,
-- `--start`: pri štarte.
+- `--start`: pri štarte,
+- `--session K`: pri reset bode číslo K (čísla sú na mape).
+
+Rozmery tvarov netreba zadávať. Nástroj ich nastaví podľa toho, aké veľké sú
+v danom mieste pláty terénu (na Snow Jame zhruba 10 m). Tvar menší ako 1,5
+plátu by sa rozmazal, preto ho nástroj bez `--force` odmietne.
 
 Tvary:
 - `kicker`: skok, ktorý sa otáča po smere trate. Parametre `--height`,
@@ -126,14 +131,15 @@ Tvary:
   posun.
 
 ```
-# 3 m skok, 250 m od štartu Snow Jamu
+# 3 m skok, 250 m od štartu Snow Jamu (rozmery podľa terénu)
 python3 -m ssx3map terrain "SSX 3 (USA).iso" --location ARA1 --along 250 ^
-    --shape kicker --height 3 --length 15 --width 12 -o SSX3_skok.iso
+    --shape kicker --height 3 -o SSX3_skok.iso
 ```
 
 Stromy a ostatné objekty na upravenom teréne sa posunú spolu s ním. Posunú
-sa aj body štartu a resetu. Ak sú v oblasti zábradlia (rails), nástroj
-vypíše upozornenie, lebo tie sa zatiaľ neposúvajú.
+sa aj body štartu a resetu. Zábradlia (rails) v oblasti nástroj
+zdvihne alebo zníži spolu s ním. Iba zábradlie dlhšie ako celá úprava ostane
+na mieste, a vtedy nástroj vypíše upozornenie.
 
 **Objekty.** Môžeš ich vypísať, posunúť alebo odstrániť. Odstránenie ich
 presunie 1 km pod horu a spolu s nimi aj ich kolíziu.
@@ -180,8 +186,8 @@ Spojky sa volajú podľa lokácií, ktoré spájajú (napr. `A_ARA1`). Oblohy s�
 
 - Zmena veľkosti záznamov: nové objekty, iný počet trojuholníkov a podobne.
   Na to treba pochopiť a prepisovať `bam.sdb`.
-- Posúvanie zábradlí (rails) a AI trás spolu s terénom. AI jazdci jazdia po
-  teréne, ich trasa sa však nemení.
+- Posúvanie AI trás spolu s terénom. AI jazdci jazdia po teréne, ich trasa sa
+  však nemení.
 - Osvetlenie terénu je zapečené v textúrach, takže nový kopec nemá
   vlastné tiene.
 - Import vlastného PNG do textúry. Hotový je export a prefarbenie.

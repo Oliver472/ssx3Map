@@ -456,13 +456,14 @@ class Report:
                                 n = (n + a - 1) // a * a
                             total += n
                         variants[f'hdr{hdr} {"aligned" if aligned else "raw"} skip {skip_name}'] = total
+            variants['kinds<=12 with headers'] = sum(r.size + 8 for r in recs if r.kind <= 12)
             for name, total in variants.items():
                 hyps[name] += total == size
             rows.append((c, size, dec, variants))
         n = len(rows)
         self.out(f'  sub-chunk infos: record count, chunk id and SSB offset match for {count_ok}/{n}; '
                  f'per-kind counts (u16 6..18 = kinds 0..12) match for {shorts_ok}/{n}')
-        best = hyps.most_common(4)
+        best = hyps.most_common(3) + [('kinds<=12 with headers', hyps['kinds<=12 with headers'])]
         self.out(f'  size field (+8) hypotheses, chunks matching: {best}')
         diffs = [size - dec for _, size, dec, _ in rows]
         self.out(f'  size field minus decoded size: {_dist(diffs)}')
@@ -475,6 +476,14 @@ class Report:
             kinds = collections.Counter(r.kind for r in s.records(loc.chunk_end, keep=False))
             match += list(loc.shorts[:23]) == [kinds.get(k, 0) for k in range(23)]
         self.out(f'  location shorts 0..22 = record counts of the last chunk: {match}/{len(w.sdb.locations)}')
+        own = 0
+        for loc in w.sdb.locations:
+            kinds = collections.Counter(r.kind for c in loc.chunks for r in s.records(c, keep=False)
+                                        if r.track == loc.index)
+            own += list(loc.shorts[:23]) == [kinds.get(k, 0) for k in range(23)]
+        self.out(f'  location shorts 0..22 = counts of records on the location\'s own track: '
+                 f'{own}/{len(w.sdb.locations)}; shorts 23..27 of ARA1: '
+                 f'{[l.shorts[23:] for l in w.sdb.locations if l.name == "ARA1"]}')
         # Patch box rule.
         rules = collections.Counter()
         sampled = self._sample_records(1, 300)
@@ -514,6 +523,7 @@ class Report:
     def courses(self):
         w = self.w
         codes = ['ARA1', 'BRA2', 'CRA3', 'DRA4', 'ERA5', 'ASS1', 'ABA1', 'BHP1', 'ABC1']
+        from . import aip as aipmod
         for code in codes:
             try:
                 course = mapedit.course_aip(w, code)
@@ -522,13 +532,23 @@ class Report:
             if course is None:
                 self.out(f'  {code}: no AIP')
                 continue
-            path = course.main_path()
+            line = aipmod.course_line(course)
             start = course.start()
-            fits = path.fits_bounds() if path else None
             self.out(f'  {code}: {len(course.ai_paths)} AI paths, {len(course.track_paths)} track paths, '
-                     f'{len(course.regions)} regions; main line {path.length / 100 if path else 0:.0f} m, '
-                     f'{len(path.segments) if path else 0} segments, inside its bounds: {fits}; start '
+                     f'regions {collections.Counter(r.kind for r in course.regions)}; start '
                      f'{tuple(round(v / 100, 1) for v in start.position) if start else None}')
+            for p in course.track_paths:
+                pts = p.points()
+                self.out(f'    track {p.index}: header {p.header[:3]} {p.header[3]:.1f}; {len(p.segments)} segs, '
+                         f'{p.length / 100:.0f} m, from {tuple(round(v / 100) for v in pts[0])} to '
+                         f'{tuple(round(v / 100) for v in pts[-1])}, in bounds {p.fits_bounds()}')
+            if line:
+                self.out(f'    line: parts {line.parts}, gaps {[round(g / 100, 1) for g in line.gaps]} m, '
+                         f'{line.length / 100:.0f} m after the start (start at {line.start_offset / 100:.0f} m)')
+            sessions = sorted((r for r in course.regions if r.kind == 1), key=lambda r: r.slot)
+            if line and sessions:
+                self.out('    session points at ' + ', '.join(
+                    f'{r.slot}: {line.nearest(r.position[0], r.position[1])[0] / 100:.0f} m' for r in sessions))
         # Terrain dry run: a 3 m kicker 200 m down Snow Jam, re-encoded in memory.
         try:
             from .world import World
@@ -536,11 +556,14 @@ class Report:
             probe.__dict__.update(w.__dict__)
             probe.stream = ssb.WorldStream(w.stream.original)
             pl = mapedit.place(probe, 'ARA1', along=200.0)
-            dz = terrain.kicker(pl.frame, 300.0, 1500.0, 1000.0, 500.0, 400.0)
+            dz = terrain.bump(pl.frame, 300.0, 2500.0)
             rep = mapedit.apply_field(probe, 'ARA1', pl.frame, dz)
-            self.out(f'  ARA1 kicker at 200 m: x {pl.frame.x / 100:.1f} y {pl.frame.y / 100:.1f} '
-                     f'z {pl.z / 100 if pl.z is not None else None}; {rep.patches} patches, {rep.objects} objects, '
-                     f'{rep.points} points, rails in area {len(rep.rails_in_area)}')
+            sizes = sorted(rep.patch_sizes) or [0]
+            self.out(f'  ARA1 bump (3 m, radius 25 m) at 200 m: x {pl.frame.x / 100:.1f} y {pl.frame.y / 100:.1f} '
+                     f'z {pl.z / 100 if pl.z is not None else None}; {rep.patches} patches '
+                     f'(typical {sizes[len(sizes) // 2] / 100:.1f} m, largest {sizes[-1] / 100:.1f} m), shape error '
+                     f'{rep.shape_error / 100:.2f} m, {rep.objects} objects, {rep.rails} rails moved, '
+                     f'{len(rep.rails_in_area)} rails left, {rep.points} points')
             image, report = probe.stream.build()
             probe.stream.verify(image)
             self.out(f'  re-encoded and verified: {collections.Counter(x["method"] for x in report)}')

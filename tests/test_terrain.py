@@ -157,3 +157,62 @@ class TerrainTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class CourseLineTest(unittest.TestCase):
+    def aip_bytes(self, paths, regions):
+        out = struct.pack('<I', 1) + struct.pack('<I', 0) + struct.pack('<I', len(paths))
+        for pts in paths:
+            segs = []
+            for a, b in zip(pts, pts[1:]):
+                d = [b[k] - a[k] for k in range(3)]
+                n = math.sqrt(sum(v * v for v in d))
+                segs.append((d[0] / n, d[1] / n, d[2] / n, n))
+            lo = [min(p[k] for p in pts) for k in range(3)]
+            hi = [max(p[k] for p in pts) for k in range(3)]
+            out += struct.pack('<IIIf', 0, 0, 0, 0.0) + struct.pack('<II', len(segs), 0)
+            out += struct.pack('<9f', *pts[0], *lo, *hi) + b''.join(struct.pack('<4f', *s) for s in segs)
+        out += struct.pack('<I', 0) + struct.pack('<I', len(regions))
+        for slot, kind, p in regions:
+            out += struct.pack('<II6fII', slot, kind, *p, 0.0, 1.0, 0.0, 0, 0)
+        return out
+
+    def test_chains_sections_from_the_start(self):
+        # Three sections stored out of order; the start grid sits 10 m into section "a".
+        a = [(0.0, 0.0, 0.0), (0.0, 30000.0, -9000.0)]
+        b = [(0.0, 30100.0, -9000.0), (20000.0, 50000.0, -15000.0)]     # 1 m gap after a
+        c = [(20000.0, 50000.0, -15000.0), (20000.0, 90000.0, -27000.0)]
+        stray = [(90000.0, 0.0, 0.0), (95000.0, 0.0, 0.0)]               # an unrelated path
+        data = self.aip_bytes([c, stray, a, b], [(0, 0, (0.0, 1000.0, -300.0)), (3, 1, (0.0, 20000.0, 0.0))])
+        record = aip.decode(data)
+        line = aip.course_line(record)
+        self.assertEqual(line.parts, [2, 3, 0])
+        self.assertAlmostEqual(line.start_offset, math.dist(a[0], (0.0, 1000.0, -300.0)), delta=5)
+        p, h = line.at(0.0)
+        self.assertAlmostEqual(p[1], 1000.0, delta=1)
+        expected = math.dist(*a) + math.dist(a[1], b[0]) + math.dist(*b) + math.dist(*c) - line.start_offset
+        self.assertAlmostEqual(line.length, expected, delta=1)
+        p, h = line.at(math.dist(*a) - line.start_offset + math.dist(a[1], b[0]) + 1.0)
+        self.assertAlmostEqual(p[0], b[0][0], delta=5)
+        self.assertGreater(h[0], 0.5)               # heading turns towards +x in section b
+        d, _ = line.nearest(0.0, 20000.0)
+        self.assertAlmostEqual(d, math.dist((0, 0, 0), (0, 20000.0, -6000.0)) - line.start_offset, delta=5)
+
+
+class RailTest(unittest.TestCase):
+    def test_rigid_move(self):
+        rec = bytearray(48 + 144 * 2)
+        struct.pack_into('<3f3f', rec, 4, 0, 0, 100, 10, 10, 200)
+        for k in range(2):
+            base = 48 + 144 * k
+            struct.pack_into('<4f', rec, base + 0x40, 5.0 * k, 0.0, 150.0, 1.0)
+            struct.pack_into('<3f3f', rec, base + 0x6C, 0, 0, 120, 10, 10, 180)
+        self.assertTrue(mapedit._rail_rigid(rec, 0, len(rec)))
+        mapedit.translate_rail(rec, 0, len(rec), 50.0)
+        self.assertEqual(struct.unpack_from('<3f3f', rec, 4), (0, 0, 150, 10, 10, 250))
+        for k in range(2):
+            base = 48 + 144 * k
+            self.assertEqual(struct.unpack_from('<4f', rec, base + 0x40), (5.0 * k, 0.0, 200.0, 1.0))
+            self.assertEqual(struct.unpack_from('<3f3f', rec, base + 0x6C), (0, 0, 170, 10, 10, 230))
+        struct.pack_into('<f', rec, 48 + 0x50, 1.0)
+        self.assertFalse(mapedit._rail_rigid(rec, 0, len(rec)))

@@ -35,3 +35,29 @@ BAM.BIG sha1 `d28a53689d0d9ebab598da5265893f0bee368aa2`, na disku od LBA 865271,
   Formáty: 4-bit 4 258×, 8-bit 1 771×, RGBA 174×.
 - Painter (druh 15): jeden na lokáciu, skye a TRANSP majú prázdny (8 B).
   ARA1 má 9 fog payloadov, prvý: near 3000, far 10000, farba (0.70, 0.82, 1.00), density 2.
+
+# Druhý report (inspect s geometriou)
+
+## bam.sdb, sub-chunk info (68 B, jedno na chunk)
+`u16 počet záznamov, u16 index chunku, u32 offset chunku v bam.ssb, u32 veľkosť,
+u16 × 13 počty záznamov druhov 0..12, …, 7 × u32 nuly`. Overené na 159/159 chunkov.
+- Veľkosť sa rovná dekódovanej veľkosti pri 110 textúrových chunkoch. Pri hlavných chunkoch
+  je menšia. Pri ASKY je rozdiel presne 268 B, čo je súčet (8 + veľkosť) záznamov druhov
+  13, 14, 15, 16, 18, 20 a 22. Hypotéza: **veľkosť = Σ (8 + size) záznamov druhov 0..12**.
+  Overí ju ďalší report.
+- 28 shortov v zázname lokácie: prvých 23 sú počty záznamov podľa druhu. Sedia so
+  záznamami posledného chunku pre 43 zo 49 lokácií (nesedí TRANSP a 5 oblôh, ktoré majú
+  textúry v hlavnom chunku). Hypotéza: počítajú sa len záznamy na vlastnom tracku lokácie.
+
+## Terén, zábradlia
+- Bbox plátu = bbox Bézierovej riadiacej siete (300/300 presne). Guľa obsahuje celý povrch.
+- Rail segment: riadok na +0x50 je nulový (65/65 vo vzorke), takže zábradlie sa dá posunúť
+  pripočítaním k +0x48 (M3.z) a k bboxom.
+- Na Snow Jame je typický plát väčší ako 4,8 m z prvej vzorky ABA1. 15 m skok zasiahol iba
+  4 pláty, takže tvary treba robiť aspoň 1,5× väčšie ako plát.
+
+## AIP (druh 14, rid 0)
+- Snow Jam: 129 AI trás, 8 track trás, 14 regiónov (6 štartových pozícií a 8 session bodov).
+- Trať je rozdelená na viac track trás (úsekov). Najdlhší úsek Snow Jamu má 882 m, celá
+  trať je ich reťaz. Segment = (smer xyz, dĺžka): polyline sedí v bounds pri všetkých tratiach.
+- Štart Snow Jamu: (-1318.8, 138.6, -2287.7) m, rovnaké ako v ssx-web.

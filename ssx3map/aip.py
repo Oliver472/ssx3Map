@@ -83,13 +83,6 @@ class Aip:
     links: list = field(default_factory=list)
     regions: list = field(default_factory=list)
 
-    def main_path(self):
-        """The longest track path (the course line), else the longest AI path."""
-        pool = self.track_paths or self.ai_paths
-        if not pool:
-            return None
-        return max(pool, key=lambda p: p.length)
-
     def start(self):
         grid = sorted((r for r in self.regions if r.kind == 0), key=lambda r: r.slot)
         return grid[0] if grid else None
@@ -160,3 +153,87 @@ def shift_regions(buf, record_offset, aip, dz):
 def heading_xy(direction):
     n = math.hypot(direction[0], direction[1]) or 1.0
     return direction[0] / n, direction[1] / n
+
+
+@dataclass
+class Line:
+    """The course line: track paths chained end to start, measured from the start grid."""
+    points: list
+    parts: list             # path indices, in order
+    gaps: list              # cm between consecutive parts
+    start_offset: float     # distance along `points` of the start grid's projection
+
+    def _cumulative(self):
+        acc = [0.0]
+        for a, b in zip(self.points, self.points[1:]):
+            acc.append(acc[-1] + math.dist(a, b))
+        return acc
+
+    @property
+    def length(self):
+        return self._cumulative()[-1] - self.start_offset
+
+    def at(self, distance):
+        """(x, y, z), (dx, dy) at `distance` cm after the start grid (clamped to the line)."""
+        target = self.start_offset + max(0.0, distance)
+        acc = self._cumulative()
+        for k in range(len(self.points) - 1):
+            if target <= acc[k + 1] or k == len(self.points) - 2:
+                a, b = self.points[k], self.points[k + 1]
+                seg = acc[k + 1] - acc[k]
+                t = min(1.0, max(0.0, (target - acc[k]) / seg)) if seg else 0.0
+                return tuple(a[i] + (b[i] - a[i]) * t for i in range(3)), heading_xy((b[0] - a[0], b[1] - a[1]))
+        return self.points[-1], (1.0, 0.0)
+
+    def nearest(self, x, y):
+        """(distance after the start, heading) of the line point closest to (x, y)."""
+        acc = self._cumulative()
+        best = None
+        for k in range(len(self.points) - 1):
+            a, b = self.points[k], self.points[k + 1]
+            dx, dy = b[0] - a[0], b[1] - a[1]
+            n = dx * dx + dy * dy
+            t = 0.0 if not n else min(1.0, max(0.0, ((x - a[0]) * dx + (y - a[1]) * dy) / n))
+            px, py = a[0] + dx * t, a[1] + dy * t
+            d = math.hypot(px - x, py - y)
+            if best is None or d < best[0]:
+                best = (d, acc[k] + t * (acc[k + 1] - acc[k]), heading_xy((dx, dy)))
+        return best[1] - self.start_offset, best[2]
+
+
+def course_line(aip, max_gap=5000.0):
+    """Chain the track paths (else the AI paths) into one line from the start grid on.
+
+    The first part is the path passing closest to start-grid slot 0; each next
+    part is the unused path whose first point is closest to the current end,
+    while that gap stays under `max_gap` cm.
+    """
+    pool = [p for p in aip.track_paths if p.segments] or [p for p in aip.ai_paths if p.segments]
+    if not pool:
+        return None
+    grid = aip.start()
+    anchor = grid.position if grid else pool[0].position
+    first = min(pool, key=lambda p: min(math.dist(q, anchor) for q in p.points()))
+    chain, gaps, used = [first], [], {first.index}
+    while True:
+        end = chain[-1].points()[-1]
+        options = [(math.dist(p.points()[0], end), p) for p in pool if p.index not in used]
+        if not options:
+            break
+        gap, nxt = min(options, key=lambda o: o[0])
+        if gap > max_gap:
+            break
+        chain.append(nxt)
+        gaps.append(gap)
+        used.add(nxt.index)
+    points = []
+    for p in chain:
+        pts = p.points()
+        if points and math.dist(points[-1], pts[0]) < 1.0:
+            pts = pts[1:]
+        points.extend(pts)
+    line = Line(points, [p.index for p in chain], gaps, 0.0)
+    if grid is not None:
+        offset, _ = line.nearest(grid.position[0], grid.position[1])
+        line.start_offset = offset
+    return line
