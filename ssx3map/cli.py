@@ -300,6 +300,13 @@ def cmd_build(args):
     line0 = aipmod.course_line(course) if course else None
     t = time.time()
     results = recipe.run(w, rc, skip=skip, log=print)
+    print('kontrolujem, či sa úpravy zmestia do herných dát…')
+    try:
+        w, results, left_out = recipe.fit(w, lambda: _open(args.input), rc, results, skip=skip, log=print)
+    except recipe.RecipeError as e:
+        raise SystemExit(f'error: {e}; nothing written')
+    if left_out:
+        print(f'vynechané kroky (nezmestili sa do herných dát): {", ".join(map(str, sorted(left_out)))}')
     done = sum(r.ok for r in results)
     line1 = aipmod.course_line(mapedit.course_aip(w, code)) if course else None
     print(f'hotovo {done} z {len(results)} krokov ({time.time() - t:.0f} s)'

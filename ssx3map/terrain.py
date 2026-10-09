@@ -134,12 +134,24 @@ def _fit(d):
     return [[sum(_VINV[j][b] * tmp[b][i] for b in range(4)) for i in range(4)] for j in range(4)]
 
 
-def displace(buf, offset, field):
+def _bilinear(d):
+    """Coefficients of the bilinear interpolation of the corner values of d[v][u] (u, v in 0..3)."""
+    a, b, c, e = d[0][0], d[0][3], d[3][0], d[3][3]          # (0,0), (1,0), (0,1), (1,1)
+    coef = [[0.0] * 4 for _ in range(4)]
+    coef[0][0], coef[0][1], coef[1][0], coef[1][1] = a, b - a, c - a, e - b - c + a
+    return coef
+
+
+def displace(buf, offset, field, sideways='cubic'):
     """Move the patch at buf[offset:offset+432] by the vector field field(x, y, z) -> (dx, dy, dz).
 
     The patch is sampled on the 4 x 4 grid, the samples are moved and the bicubic
     is refitted through them; corners, box and sphere are rebuilt. Components the
-    field leaves at zero stay bit-identical. Returns the largest displacement length.
+    field leaves at zero stay bit-identical. With sideways='bilinear' the x/y
+    displacement is interpolated from the four corners only: it changes at most
+    four coefficients per axis (the data stays about as compressible as on the
+    disc) and neighbours still share their edges exactly. Returns the largest
+    displacement length.
     """
     patch = Patch(buf[offset:offset + PATCH_SIZE])
     samples = [[patch.point(u, v) for u in GRID] for v in GRID]       # samples[b][a] at (u=GRID[a], v=GRID[b])
@@ -156,7 +168,7 @@ def displace(buf, offset, field):
         dk = [[x[k] for x in row] for row in d]
         if not any(v for row in dk for v in row):
             continue
-        coef = _fit(dk)
+        coef = _bilinear(dk) if k < 2 and sideways == 'bilinear' else _fit(dk)
         for j in range(4):
             for i in range(4):
                 if abs(coef[j][i]) < 1e-4:      # rounding noise: keep the stored bits (and zeros) as they are
@@ -169,17 +181,39 @@ def displace(buf, offset, field):
     for o, uv in zip(CORNERS, slot_uv):
         struct.pack_into('<3f', buf, offset + o, *corners[uv])
     # Box: the Bezier hull (contains the whole surface), grown by a float ulp's worth.
+    # An axis whose stored range still holds the hull snugly keeps its bytes, so
+    # an edit rewrites only what it has to (the blocks must still fit their room).
     net = [p for row in new.control_net() for p in row]
     lo, hi = _bounds(net + list(corners.values()))
-    lo = tuple(v - 0.01 - 1e-6 * abs(v) for v in lo)
-    hi = tuple(v + 0.01 + 1e-6 * abs(v) for v in hi)
-    struct.pack_into('<3f', buf, offset + BBOX_MIN, *lo)
-    struct.pack_into('<3f', buf, offset + BBOX_MAX, *hi)
+    lo = [v - 0.01 - 1e-6 * abs(v) for v in lo]
+    hi = [v + 0.01 + 1e-6 * abs(v) for v in hi]
+    old_lo, old_hi = patch.bbox
+    for k in range(3):
+        if old_lo[k] <= lo[k] and lo[k] - old_lo[k] <= SNUG:
+            lo[k] = old_lo[k]
+        if old_hi[k] >= hi[k] and old_hi[k] - hi[k] <= SNUG:
+            hi[k] = old_hi[k]
+    _pack_changed(buf, offset + BBOX_MIN, lo)
+    _pack_changed(buf, offset + BBOX_MAX, hi)
+    dense = [new.point(u / 6, v / 6) for u in range(7) for v in range(7)] + list(corners.values())
+    old_sphere = struct.unpack_from('<4f', buf, offset + SPHERE)
+    if max(math.dist(old_sphere[:3], p) for p in dense) <= old_sphere[3] - 0.01 and \
+            all(old_lo[k] - SNUG <= old_sphere[k] <= old_hi[k] + SNUG for k in range(3)):
+        return biggest                      # the old sphere still holds the surface
     centre = tuple((a + b) / 2 for a, b in zip(lo, hi))
-    dense = [new.point(u / 6, v / 6) for u in range(7) for v in range(7)]
-    radius = max(math.dist(centre, p) for p in dense + list(corners.values()))
+    radius = max(math.dist(centre, p) for p in dense)
     struct.pack_into('<4f', buf, offset + SPHERE, *centre, _f32(radius * 1.0001 + 0.01))
     return biggest
+
+
+SNUG = 100.0        # cm a stored box may stay larger than the surface it bounds
+
+
+def _pack_changed(buf, at, values):
+    old = struct.unpack_from('<3f', buf, at)
+    for k, v in enumerate(values):
+        if v != old[k]:
+            struct.pack_into('<f', buf, at + 4 * k, v)
 
 
 # --------------------------------------------------------------------------

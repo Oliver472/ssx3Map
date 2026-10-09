@@ -146,13 +146,14 @@ def _objects(world, code, pl, step):
     return f'{"odstránené" if step.get("remove") else "posunuté"} {done} objektov'
 
 
-def run(world, recipe, skip=(), log=None):
-    """Apply every step; returns [StepResult]. Steps whose op is in `skip` are left out."""
+def run(world, recipe, skip=(), leave_out=(), log=None):
+    """Apply every step; returns [StepResult]. Steps whose op is in `skip`, or whose
+    number (from 1) is in `leave_out`, are left out."""
     code = recipe['course']
     results = []
     for n, step in enumerate(recipe['steps'], 1):
         op = step['op']
-        if op in skip:
+        if op in skip or n in leave_out:
             continue
         where = ''
         try:
@@ -172,3 +173,29 @@ def run(world, recipe, skip=(), log=None):
             place = f'{step["along"]:.0f} m' if 'along' in step else where
             log(f'  {n:2d}. {op:8s} {place:>8s}: {"ok, " if res.ok else "PRESKOČENÉ: "}{res.message}')
     return results
+
+
+def fit(world, open_world, recipe, results, skip=(), log=None):
+    """Make the edited world fit the game data: while a changed chunk would not fit its
+    blocks, build again without one more step - the last warp first (warps rewrite the
+    most bytes), then the last shape. Returns (world, results, left-out step numbers)."""
+    left_out = []
+    while True:
+        over = {}
+        for c in world.stream.changed_chunks():
+            short = world.stream.shortfall(c)
+            if short > 0:
+                over[c] = short
+        if not over:
+            return world, results, left_out
+        applied = [r for r in results if r.ok]
+        warps = [r for r in applied if r.op == 'warp']
+        victim = (warps or applied or [None])[-1]
+        if victim is None:
+            raise RecipeError(f'the edits do not fit the game data (chunk {", ".join(map(str, over))})')
+        left_out.append(victim.number)
+        if log:
+            log(f'  úpravy sa nezmestia do herných dát (chýba ~{max(over.values())} B); '
+                f'vynechávam krok {victim.number} ({victim.op})')
+        world = open_world()
+        results = run(world, recipe, skip=skip, leave_out=left_out)

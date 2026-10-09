@@ -114,9 +114,16 @@ V PCSX2 potom spusti `SSX3_nova_trat.iso` a jazdi Snow Jam (preteky).
 `nova_trat.svg` otvor v prehliadači a uvidíš novú trať zhora.
 
 Príkaz vypíše každý krok. Krok, ktorý sa na danom mieste nedá urobiť
-(terén by ho neudržal), sa preskočí a zvyšok pokračuje. Ak by sa v hre niečo
-pokazilo, napríklad by AI jazdci blúdili alebo by nefungoval cieľ, vyrob
-trať bez ohybov (len skoky a vlny, overené v PCSX2):
+(terén by ho neudržal), sa preskočí a zvyšok pokračuje.
+
+Upravené dáta sa musia zmestiť do pôvodných blokov hry, každý blok má
+pevnú veľkosť. Príkaz to pred uložením skontroluje. Ak by sa úpravy
+nezmestili, vynechá najprv ohyby (prepisujú najviac dát), potom posledné
+skoky, a vypíše, ktoré kroky vynechal. Výsledné ISO je tak vždy hrateľné.
+Celé to trvá niekoľko minút, prekóduje sa na všetkých jadrách procesora.
+
+Ak by sa v hre niečo pokazilo, napríklad by AI jazdci blúdili alebo by
+nefungoval cieľ, vyrob trať bez ohybov (len skoky a vlny, overené v PCSX2):
 
 ```
 python3 -m ssx3map build "SSX 3 (USA).iso" snowjam_oliver --skip warp -o SSX3_skoky.iso

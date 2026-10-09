@@ -22,7 +22,7 @@ from dataclasses import dataclass
 
 __all__ = [
     'RefPackError', 'Header', 'parse_header', 'decompress', 'compress',
-    'compress_exact', 'ExactSizeError', 'stream_stats',
+    'compress_exact', 'ExactSizeError', 'stream_stats', 'prefix_sizes',
 ]
 
 SHORT, MEDIUM, LONG = 0, 1, 2
@@ -449,6 +449,37 @@ def compress(data, header=None, max_chain=64):
     return _emit(data, tokens, header)
 
 
+def prefix_sizes(data, max_chain=64):
+    """Upper estimates of the stream size (header and stop included) of every prefix data[:n].
+
+    A forward pass of the optimal parse; one call replaces a bisection of
+    compress() calls when cutting a buffer into blocks of a given capacity.
+    """
+    n = len(data)
+    matches = _find_matches(data, 0, n, max_chain=max_chain)
+    INF = float('inf')
+    cost = [INF] * (n + 1)
+    cost[0] = 0.0
+    for k in range(n):
+        c = cost[k]
+        if c + _LIT_COST < cost[k + 1]:
+            cost[k + 1] = c + _LIT_COST
+        stairs = matches.get(k)
+        if not stairs:
+            continue
+        prev = 2
+        for length, dist in stairs:
+            for ln in range(prev + 1, length + 1):
+                form = _best_form(ln, dist)
+                if form is not None:
+                    v = c + FORM_SIZE[form]
+                    if v < cost[k + ln]:
+                        cost[k + ln] = v
+            prev = length
+    head = len(make_header(max(n, 1)))
+    return [head + 4 + c * 1.002 for c in cost]
+
+
 def _promo_room(length, dist, form):
     """How many +1 promotions (short->medium->long) this match allows."""
     room = 0
@@ -515,7 +546,8 @@ def _grow(tokens, deficit):
 def _encode_exact(data, target_size, header, start, end, final, max_chain):
     tokens = _optimal_parse(data, max_chain, start, end, final)
     size = len(header) + sum(_token_size(t) for t in tokens)
-    if size > target_size and max_chain < 512:
+    # A deeper match search saves a little; only worth its time when that could be enough.
+    if target_size < size <= target_size + max(64, (end or len(data)) // 200) and max_chain < 512:
         tokens = _optimal_parse(data, 512, start, end, final)
         size = len(header) + sum(_token_size(t) for t in tokens)
     if size > target_size:

@@ -609,7 +609,7 @@ def apply_warp(world, code, grab):
                 if not mapedit._near(frame, reach, *before.bbox):
                     continue
                 buf = world.stream.chunk(c)
-                moved = terrain.displace(buf, rec.offset, grab)
+                moved = terrain.displace(buf, rec.offset, grab, sideways='bilinear')
                 if moved:
                     report.patches += 1
                     report.max_move = max(report.max_move, moved)
