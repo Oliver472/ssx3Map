@@ -83,6 +83,7 @@ message in the log.
 - [docs/command-line.md](docs/command-line.md) – every command (`flat`, `build`, `terrain`,
   `warp`, `objects`, `fog`, `tint`…), recipes, location codes and how saving works.
 - [docs/findings.md](docs/findings.md) – what is known about the game's data formats.
+- [docs/growing.md](docs/growing.md) – test images for bigger maps (`python3 -m ssx3map probe`).
 - Tests (they build their own synthetic game data): `python3 -m unittest`.
   The browser test is `tests/browser/editor_smoke.mjs` (needs Node and `playwright`).
 

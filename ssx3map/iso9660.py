@@ -1,9 +1,10 @@
 """Find and overwrite a file inside a PS2 DVD image (ISO 9660, 2048-byte sectors).
 
-Only same-size or shrinking replacements are supported: the file keeps its
-sectors, so nothing else on the disc moves. PS2 DVDs also carry a UDF bridge
-that points at the same sectors, which stays valid as long as the size is
-unchanged (the world editor never changes the size of BAM.BIG).
+replace_file keeps the file in its sectors (same size or smaller), so nothing
+else on the disc moves. relocate_file is for a file that grew: it goes to the
+end of the image and its ISO 9660 directory record and the volume size follow.
+PS2 DVDs also carry a UDF bridge that points at the same sectors; the PS2 reads
+ISO 9660, so a relocated file's UDF entry is left stale.
 """
 from __future__ import annotations
 
@@ -111,3 +112,60 @@ def replace_file(image_path, inner_path, payload, output_path=None):
             f.seek(entry.record_pos + 10)
             f.write(struct.pack('<I', len(payload)) + struct.pack('>I', len(payload)))
     return target, entry
+
+
+def list_files(image_path):
+    """[(path, lba, size)] of every file in the image."""
+    out = []
+    with open(image_path, 'rb') as f:
+        pvd = _read_at(f, 16 * SECTOR, SECTOR)
+        if pvd[0] != 1 or pvd[1:6] != b'CD001':
+            raise IsoError('no ISO 9660 primary volume descriptor (is this a .iso?)')
+        root = pvd[156:156 + 34]
+        todo = [('', *struct.unpack_from('<I', root, 2), *struct.unpack_from('<I', root, 10))]
+        seen = set()
+        while todo:
+            prefix, lba, size = todo.pop()
+            if lba in seen:
+                continue
+            seen.add(lba)
+            for name, r_lba, r_size, flags, _ in _records(f, lba, size):
+                if name in (b'\0', b'\1'):
+                    continue
+                path = prefix + '/' + name.decode('latin-1').split(';')[0]
+                if flags & 2:
+                    todo.append((path, r_lba, r_size))
+                else:
+                    out.append((path.lstrip('/'), r_lba, r_size))
+    return sorted(out, key=lambda e: e[1])
+
+
+def relocate_file(image_path, inner_path, payload, output_path, clear_old=True):
+    """Copy the image to `output_path` with `inner_path` replaced by `payload` at the end of the disc.
+
+    The old sectors are zeroed (clear_old), so a game that still read them would
+    fail at once instead of quietly using the old file."""
+    entry = find(image_path, inner_path)
+    if os.path.abspath(output_path) == os.path.abspath(image_path):
+        raise IsoError('refusing to overwrite the input image')
+    shutil.copyfile(image_path, output_path)
+    with open(output_path, 'r+b') as f:
+        f.seek(0, os.SEEK_END)
+        lba = (f.tell() + SECTOR - 1) // SECTOR
+        f.seek(lba * SECTOR)
+        f.write(payload)
+        f.write(bytes(-len(payload) % SECTOR))
+        total = lba + (len(payload) + SECTOR - 1) // SECTOR
+        if clear_old:
+            f.seek(entry.offset)
+            left = (entry.size + SECTOR - 1) // SECTOR * SECTOR
+            while left > 0:
+                n = min(left, 1 << 22)
+                f.write(bytes(n))
+                left -= n
+        f.seek(entry.record_pos + 2)
+        f.write(struct.pack('<I', lba) + struct.pack('>I', lba)
+                + struct.pack('<I', len(payload)) + struct.pack('>I', len(payload)))
+        f.seek(16 * SECTOR + 80)                     # volume space size, both byte orders
+        f.write(struct.pack('<I', total) + struct.pack('>I', total))
+    return lba

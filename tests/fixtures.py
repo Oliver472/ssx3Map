@@ -80,21 +80,44 @@ def build_ssb(chunks, block_decoded=6000, slack=40, padding=0):
     return bytes(out)
 
 
-def build_sdb(locations, textures=8, pages=2):
-    """locations: [(name, chunk_end)]."""
+def build_sdb(locations, textures=8, pages=2, ssb=None, chunks=None):
+    """locations: [(name, chunk_end)]. With the bam.ssb image and the decoded chunks, also the
+    chunk-info and sub-chunk-info tables laid out like the retail file (docs/findings.md)."""
+    from ssx3map import ssb as ssbmod
+    tables = ssb is not None
+    n = len(chunks) if tables else 0
     head = bytearray(80)
-    struct.pack_into('<4s f 3I', head, 0, b'\x01\x00\x00\x00', 1.0, len(locations), 0, 0)
+    struct.pack_into('<4s f 3I', head, 0, b'\x01\x00\x00\x00', 1.0, len(locations), n, n)
     struct.pack_into('<HH', head, 0x2A, textures, pages)
+    recs = [ssbmod.parse_records(c) for c in chunks] if tables else []
     body = bytearray()
     prev = -1
-    for name, end in locations:
+    for index, (name, end) in enumerate(locations):
         rec = bytearray(88)
         rec[:len(name)] = name.encode()
-        struct.pack_into('<4I', rec, 16, 0, end - prev, end, 0)
+        struct.pack_into('<4I', rec, 16, end - prev, end - prev, end, prev + 1)
+        if tables:
+            counts = [sum(1 for c in range(prev + 1, end + 1) for r in recs[c] if r.kind == k and r.track == index)
+                      for k in range(23)]
+            struct.pack_into('<23h', rec, 32, *counts)
         body += rec
         prev = end
     data = head + body
     data += bytes(-len(data) % 16)
+    if tables:
+        _, scanned = ssbmod.scan(ssb)
+        from ssx3map import terrain
+        for c in range(n):
+            boxes = [terrain.Patch(chunks[c][r.offset:r.offset + r.size]).bbox for r in recs[c]
+                     if r.kind == 1 and r.size == terrain.PATCH_SIZE]
+            lo = [min(b[0][k] for b in boxes) for k in range(3)] if boxes else [0.0] * 3
+            hi = [max(b[1][k] for b in boxes) for k in range(3)] if boxes else [0.0] * 3
+            data += struct.pack('<8f', *lo, 1.0, *hi, 1.0) + bytes(48) + struct.pack('<4i', -1, -1, c, 0)
+        for c in range(n):
+            kinds = [sum(1 for r in recs[c] if r.kind == k) for k in range(13)]
+            size = sum(r.size + 8 for r in recs[c] if r.kind <= 12)
+            data += (struct.pack('<HHII', len(recs[c]), c, scanned[c].blocks[0].offset, size)
+                     + struct.pack('<13H', *kinds) + bytes(2) + bytes(28))
     return bytes(data)
 
 
@@ -507,6 +530,6 @@ def build_course_world():
     chunks = [record(9, 255, 7, texture_8bit(32, 32, 1)) + record(10, 255, 0, light_page()), main, connector,
               record(9, 255, 3, texture_rgba(16, 16)) + record(15, 2, 0, painter_record([(1.0, 0.0, 1.0, 2.0, 0, 0, 0)]))]
     ssb = build_ssb_slots(chunks)
-    sdb = build_sdb([('AAA', 1), ('A_AAA', 2), ('ASKY', 3)])
+    sdb = build_sdb([('AAA', 1), ('A_AAA', 2), ('ASKY', 3)], ssb=ssb, chunks=chunks)
     big = build_big([('bam.sdb', sdb), ('bam.ssb', ssb), ('bam.phm', bytes(16)), ('bam.psm', bytes(16))])
     return big, chunks

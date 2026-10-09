@@ -413,6 +413,29 @@ def cmd_objects(args):
         _save(args, w)
 
 
+def cmd_probe(args):
+    """Test images for growing the world data; without an input the untouched game is looked up."""
+    from . import grow
+    path = args.input
+    if not path:
+        from .editor import games
+        found = [g for g in games.find_games() if g['original']]
+        if not found:
+            raise SystemExit('error: no untouched SSX 3 disc image found; give its path')
+        path = found[0]['path']
+    w = _open(path)
+    out = args.output or os.path.join(os.path.dirname(os.path.abspath(w.source)), 'ssx3_probes')
+    only = {int(v) for v in args.only.split(',')} if args.only else None
+    t = time.time()
+    try:
+        report = grow.probe(w, out, code=args.location, only=only)
+    except grow.GrowError as e:
+        raise SystemExit(f'error: {e}')
+    print(f'\ndone in {time.time() - t:.0f} s: {len(report)} report lines in {os.path.join(out, "probe_report.txt")}')
+    print('Start each image in PCSX2 in order and race the course (Single Event, Snow Jam).')
+    print('Note for each: does it start, does the course show, is the new ramp there and can you ride it?')
+
+
 def cmd_editor(args):
     """Without an input the page asks which game to open (it finds the disc images itself)."""
     from .editor import games
@@ -539,6 +562,15 @@ def main(argv=None):
     sp.add_argument('--force', action='store_true', help='also touch start/trigger/reset helpers')
     sp.add_argument('-o', '--output', help='output .iso or .BIG')
     sp.add_argument('-v', '--verbose', action='store_true')
+
+    sp = sub.add_parser('probe', help='write test images that grow the world data, one step each (try them in PCSX2)',
+                        description='write test images that grow the world data, one step each, and a report; '
+                                    'without INPUT the untouched game is looked up')
+    sp.add_argument('input', nargs='?', help='the original disc image (.iso) or BAM.BIG (optional)')
+    sp.set_defaults(fn=cmd_probe)
+    sp.add_argument('--location', default='ARA1', help='course to grow (default ARA1, Snow Jam)')
+    sp.add_argument('--only', help='test numbers, comma separated (default: all, 1-6)')
+    sp.add_argument('-o', '--output', help='folder for the images (default: ssx3_probes next to the input)')
 
     sp = sub.add_parser('editor', help='open the map editor in the browser (three.js)',
                         description='open the map editor in the browser; without INPUT the page lets you pick the game')

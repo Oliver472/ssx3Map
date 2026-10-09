@@ -22,6 +22,7 @@ one command as the input of the next.
 | `fog` | show or change the fog |
 | `textures` / `tint` | export textures as PNG / recolour them |
 | `info`, `list`, `inspect` | what is in the world data |
+| `probe` | test images that grow the world data, one step each ([growing.md](growing.md)) |
 
 ## Plain slope instead of a course (`flat`)
 
