@@ -8,6 +8,27 @@ kópiu, ktorá sa dá spustiť v PCSX2.
 > Herné súbory tu nie sú a do repozitára ani nepatria. Či hra upravený svet
 > naozaj načíta, sa ešte musí overiť v PCSX2.
 
+## Najrýchlejší štart (editor)
+
+Na Macu dvojklikni na **`SSX3 editor.command`** v priečinku projektu. Stiahne
+najnovšiu verziu a otvorí editor v prehliadači. Rovnako funguje aj
+`python3 -m ssx3map` v termináli.
+
+Editor sám nájde ISO hry v Dokumentoch, v Stiahnutých súboroch a na Ploche.
+Pôvodnú hru označí zelenou značkou. Klikni na hru, prípadne vyber, s čím ju
+porovnať, a daj **Otvoriť**. Všetko ostatné sa robí na stránke:
+
+- **Nová trať naraz:** *Rovný svah so skokmi* (zmaže trať a postaví svah so
+  zvoleným sklonom, šírkou a skokmi) alebo recept (napr. Oliverova trať).
+- **Štetec, Tvary, Posun, Objekty:** ručné úpravy.
+- **Uložiť upravenú hru** zapíše nové ISO vedľa pôvodného.
+- **Spustiť v PCSX2** ho rovno spustí (ak je PCSX2 v Applications).
+- **Otvoriť inú hru** vráti výber hry.
+
+Editor si pamätá naposledy otvorené a uložené hry (`~/.ssx3map.json`). Prvý
+macOS sa môže pri `.command` súbore spýtať, či ho otvoriť. Vtedy naň klikni
+pravým tlačidlom → Otvoriť.
+
 ## Ako to funguje
 
 Celá hora je jeden stream `bam.ssb`: bloky `CBXS`/`CEND` komprimované cez

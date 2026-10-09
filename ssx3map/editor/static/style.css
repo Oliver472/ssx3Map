@@ -58,3 +58,16 @@ button.active { background: #7a5d10; border-color: #c9a227; }
 .marks { font-size: 12px; max-height: 160px; overflow-y: auto; }
 .marks button { display: block; width: 100%; text-align: left; margin: 2px 0; padding: 3px 6px; font-size: 12px; }
 .marks .changed { color: #ffb74d; margin: 4px 0; }
+.small-text { font-size: 11px; overflow-wrap: anywhere; }
+button.play { background: #2e6b34; border-color: #43a047; }
+.start { position: fixed; inset: 0; background: rgba(8, 11, 14, .92); z-index: 10; display: flex;
+  align-items: center; justify-content: center; }
+.start-box { width: min(640px, 92vw); max-height: 90vh; overflow-y: auto; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 8px; padding: 18px 20px; }
+.game-list { margin: 8px 0 12px; }
+.game { display: block; width: 100%; text-align: left; margin: 4px 0; padding: 8px 10px; }
+.game.selected { border-color: var(--accent); background: #1d3a4d; }
+.game .where { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.badge { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 8px; margin-left: 6px;
+  background: #2c343e; color: var(--muted); }
+.badge.original { background: #1b5e20; color: #c8e6c9; }

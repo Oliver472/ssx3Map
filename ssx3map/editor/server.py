@@ -20,7 +20,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from .. import aip as aipmod
-from .. import mapedit, models, painter, recipe, ssb, terrain, texture, warp
+from .. import aip as _aip
+from .. import mapedit, models, painter, rebuild, recipe, ssb, terrain, texture, warp
+from ..world import World, resolve_input
+from . import games
 
 STATIC = os.path.join(os.path.dirname(__file__), 'static')
 UNDO_LIMIT = 25
@@ -41,12 +44,15 @@ def _key(chunk, rec):
 
 
 class Session:
-    def __init__(self, world, reference=None):
+    def __init__(self, world=None, reference=None):
+        self.lock = threading.RLock()
+        self._reset(world, reference)
+
+    def _reset(self, world, reference):
         self.world = world
         self.reference = reference  # another World (the untouched game) to show changes against
-        self.lock = threading.RLock()
         self.undo = []              # [(label, snapshot)]
-        self.marks = []             # [(undo depth, code, mark dict)] labels of applied recipe steps
+        self.marks = []             # [(undo depth, code, mark dict)] labels of applied steps
         self.textures = {}          # rid -> record bytes
         self.lightpages = {}        # rid -> record bytes
         self.pngs = {}              # (kind, rid) -> png bytes (or None if undecodable)
@@ -54,13 +60,40 @@ class Session:
         self.scanned = set()        # chunks already indexed for textures
         self.full_scan = False
         self.edits = 0
+        self.saved = None           # the last disc image written
+
+    # -- choosing the game ------------------------------------------------------
+    def games(self):
+        return dict(games=games.find_games(), pcsx2=games.find_pcsx2())
+
+    def open(self, req):
+        path = os.path.expanduser(req['path'])
+        compare = os.path.expanduser(req['compare']) if req.get('compare') else None
+        with self.lock:
+            world = World(resolve_input(path))
+            ref = None
+            if compare and os.path.abspath(resolve_input(compare)) != os.path.abspath(world.source):
+                ref = World(resolve_input(compare))
+            self._reset(world, ref)
+            games.remember(world.source)
+            return dict(message=f'otvorené {world.source}' + (f', porovnávam s {ref.source}' if ref else ''))
+
+    def play(self, req):
+        path = os.path.expanduser(req.get('path') or self.saved or (self.world.source if self.world else ''))
+        if not path or not path.lower().endswith('.iso') or not os.path.isfile(path):
+            raise mapedit.EditRefused('nie je čo spustiť: ulož upravenú hru ako .iso')
+        app = games.start_pcsx2(path)
+        return dict(message=f'spúšťam {os.path.basename(path)} v {os.path.basename(app)}')
 
     # -- reading ----------------------------------------------------------------
     def info(self):
         w = self.world
+        if w is None:
+            return dict(loaded=False)
         codes = {l.name for l in w.sdb.locations}
         base, _ = os.path.splitext(w.source)
-        return dict(source=w.source, iso=w.is_iso,
+        return dict(loaded=True, source=w.source, iso=w.is_iso,
+                    compare=self.reference.source if self.reference else None, saved=self.saved,
                     courses=([dict(code=c, name=NAMES.get(c, c)) for c in COURSES if c in codes]
                              or [dict(code=l.name, name=l.name) for l in w.sdb.locations]),
                     locations=[l.name for l in w.sdb.locations],
@@ -336,6 +369,49 @@ class Session:
             return dict(message=msg, code=code, steps=[dict(n=r.number, op=r.op, ok=r.ok, tag=r.tag, msg=r.message)
                                                        for r in results])
 
+    def flat(self, req):
+        """Wipe the course and build a plain slope with jumps on its route (one undo step)."""
+        w = self.world
+        code = req['code']
+        with self.lock:
+            line = _aip.course_line(mapedit.course_aip(w, code) or _aip.Aip(0))
+            if line is None:
+                raise mapedit.EditRefused(f'{code} has no race line')
+            every = float(req.get('every') or 350)
+            heights = [float(h) for h in str(req.get('heights') or '3,4,5').replace(' ', '').split(',') if h]
+            if every > 0 and heights:
+                marks_m = []
+                m = 300.0
+                while m <= line.length / 100 - 350:
+                    marks_m.append(m)
+                    m += every
+                jumps = [(m, heights[k % len(heights)]) for k, m in enumerate(marks_m)]
+            else:
+                jumps = []
+            design = rebuild.Design(grade=float(req.get('grade') or 15) / 100, width=float(req.get('width') or 60),
+                                    bank_height=float(req.get('walls') or 12), jumps=jumps)
+            snap = w.stream.snapshot(mapedit.course_chunks(w, code))
+            try:
+                r = rebuild.flatten_course(w, code, design)
+            except Exception:
+                w.stream.restore(snap)
+                raise
+            over = [c for c in w.stream.changed_chunks() if w.stream.shortfall(c) > 0]
+            if over:
+                w.stream.restore(snap)
+                raise mapedit.EditRefused('the new course does not fit the game data')
+            label = f'rovný svah {design.grade * 100:.0f} %, {len(jumps)} skokov'
+            self._push(label, snap)
+            new_line = _aip.course_line(mapedit.course_aip(w, code))
+            depth = len(self.undo)
+            for k, (m, h) in enumerate(jumps, 1):
+                p, _ = new_line.at(m * 100)
+                self.marks.append((depth, code, dict(x=round(p[0], 1), y=round(p[1], 1), z=None,
+                                                     t=f'skok {k}: {m:.0f} m, {h:+.0f} m')))
+            return dict(message=(f'{label}: {r.used} plátov ({r.rows} x {r.cols}), zmazané {r.sunk} objektov, '
+                                 f'{r.rails} zábradlí; trať {new_line.length / 100:.0f} m, pokles {r.drop / 100:.0f} m; '
+                                 f'textúrové chunky {len(r.chunks)}'))
+
     def warp(self, req):
         """Grab the ground at (x, y) and carry it to (tx, ty) (cm), lifted by `lift` and turned by `turn`."""
         w = self.world
@@ -428,6 +504,8 @@ class Session:
                 raise mapedit.EditRefused('nothing changed yet')
             t = time.time()
             report = self.world.save(output)
+            self.saved = output
+            games.remember(output)
             return dict(message=f'uložené {output}: {len(report)} blokov prekódovaných, overené '
                                 f'({time.time() - t:.0f} s)', output=output)
 
@@ -451,7 +529,7 @@ class Handler(BaseHTTPRequestHandler):
     def _guard(self, fn):
         try:
             self._send(200, fn())
-        except (mapedit.EditRefused, KeyError, ValueError) as e:
+        except (mapedit.EditRefused, KeyError, ValueError, FileNotFoundError) as e:
             self._send(400, dict(error=str(e)))
         except Exception as e:          # noqa: BLE001
             traceback.print_exc()
@@ -467,6 +545,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._static(url.path[len('/static/'):])
         if url.path == '/api/info':
             return self._guard(s.info)
+        if url.path == '/api/games':
+            return self._guard(s.games)
+        if url.path.startswith('/api/') and s.world is None:
+            return self._send(409, dict(error='najprv otvor hru'))
         if url.path == '/api/recipes':
             return self._guard(s.recipes)
         if url.path == '/api/course':
@@ -492,7 +574,14 @@ class Handler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             return self._send(400, dict(error='bad JSON'))
         s = self.session
+        if url.path == '/api/open':
+            return self._guard(lambda: s.open(req))
+        if url.path == '/api/play':
+            return self._guard(lambda: s.play(req))
+        if s.world is None:
+            return self._send(409, dict(error='najprv otvor hru'))
         routes = {'/api/terrain': lambda: s.terrain(req), '/api/stroke': lambda: s.stroke(req),
+                  '/api/flat': lambda: s.flat(req),
                   '/api/warp': lambda: s.warp(req), '/api/recipe': lambda: s.apply_recipe(req),
                   '/api/objects': lambda: s.objects(req),
                   '/api/undo': s.undo_last, '/api/save': lambda: s.save(req['output'])}
@@ -509,7 +598,7 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, body, mimetypes.guess_type(path)[0] or 'application/octet-stream')
 
 
-def serve(world, port=8765, open_browser=True, reference=None):
+def serve(world=None, port=8765, open_browser=True, reference=None):
     Handler.session = Session(world, reference)
     httpd = ThreadingHTTPServer(('127.0.0.1', port), Handler)
     url = f'http://127.0.0.1:{httpd.server_address[1]}/'

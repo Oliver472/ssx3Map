@@ -631,9 +631,31 @@ function showMarks(course) {
   }
 }
 
+function syncRecipeFields() {
+  const flat = $('recipe').value === '__flat__';
+  $('flatParams').classList.toggle('hidden', !flat);
+  $('recipeNoWarpLabel').classList.toggle('hidden', flat);
+}
+
+async function applyFlat() {
+  if (!confirm(`Zmazať trať ${state.course ? state.course.name : ''} a postaviť rovný svah? (Späť to vráti.)`)) return;
+  busy(true, 'staviam rovný svah…');
+  try {
+    const res = await api('/api/flat', { code: state.code, grade: $('flatGrade').value, width: $('flatWidth').value,
+      walls: $('flatWalls').value, every: $('flatEvery').value, heights: $('flatHeights').value });
+    log(res.message, 'ok');
+    await loadCourse(state.code, false);
+  } catch (e) {
+    log(e.message, 'err');
+  } finally {
+    busy(false);
+  }
+}
+
 async function applyRecipe() {
   const name = $('recipe').value;
   if (!name) return;
+  if (name === '__flat__') return applyFlat();
   busy(true, 'staviam trať podľa receptu… (s kontrolou miesta v dátach to trvá pár minút)');
   try {
     const res = await api('/api/recipe', { name, skip: $('recipeNoWarp').checked ? ['warp'] : [] });
@@ -1120,6 +1142,8 @@ $('showRails').addEventListener('change', buildOverlay);
 $('showChanges').addEventListener('change', buildTerrain);
 $('relief').addEventListener('change', buildTerrain);
 $('applyRecipe').addEventListener('click', applyRecipe);
+$('recipe').addEventListener('change', syncRecipeFields);
+syncRecipeFields();
 $('along').addEventListener('input', () => flyAlong(parseFloat($('along').value)));
 $('toStart').addEventListener('click', () => flyAlong(0));
 $('course').addEventListener('change', () => { select(null); state.framed = false; loadCourse($('course').value, false); });
@@ -1150,6 +1174,7 @@ async function save() {
   try {
     const res = await api('/api/save', { output: $('output').value });
     log(res.message, 'ok');
+    $('play').disabled = false;
   } catch (e) {
     log(e.message, 'err');
   } finally {
@@ -1175,11 +1200,89 @@ function animate() {
   labelRenderer.render(scene, camera);
 }
 
+// ---------------------------------------------------------------- choosing the game
+let foundGames = [];
+
+function gb(bytes) { return `${(bytes / 1073741824).toFixed(1)} GB`; }
+
+function pickGame(path) {
+  $('gamePath').value = path;
+  for (const b of document.querySelectorAll('.game')) b.classList.toggle('selected', b.dataset.path === path);
+  // Compare an edited disc with the untouched game by default.
+  const chosen = foundGames.find((g) => g.path === path);
+  const original = foundGames.find((g) => g.original && g.path !== path);
+  $('comparePath').value = chosen && !chosen.original && original ? original.path : '';
+}
+
+async function showStart(closable) {
+  $('startScreen').classList.remove('hidden');
+  $('closeStart').classList.toggle('hidden', !closable);
+  $('gameList').textContent = 'hľadám hry…';
+  try {
+    const res = await api('/api/games');
+    foundGames = res.games;
+    const list = $('gameList');
+    list.innerHTML = '';
+    if (!foundGames.length) list.textContent = 'Žiadne ISO som nenašiel. Napíš cestu k nemu nižšie.';
+    for (const g of foundGames) {
+      const b = Object.assign(document.createElement('button'), { className: 'game' });
+      b.dataset.path = g.path;
+      b.append(Object.assign(document.createElement('b'), { textContent: g.name }));
+      b.append(Object.assign(document.createElement('span'), { className: 'badge' + (g.original ? ' original' : ''),
+        textContent: g.original ? 'pôvodná hra' : 'upravená' }));
+      b.append(Object.assign(document.createElement('div'), { className: 'where',
+        textContent: `${g.folder} · ${gb(g.size)} · ${new Date(g.modified * 1000).toLocaleString('sk-SK')}` }));
+      b.addEventListener('click', () => pickGame(g.path));
+      b.addEventListener('dblclick', () => { pickGame(g.path); openGame(); });
+      list.append(b);
+    }
+    const cmp = $('comparePath');
+    cmp.innerHTML = '';
+    cmp.append(new Option('nič (ukáž len úpravy z tohto otvorenia)', ''));
+    for (const g of foundGames) cmp.append(new Option(`${g.name}${g.original ? ' (pôvodná hra)' : ''}`, g.path));
+    if (foundGames.length) pickGame(foundGames[0].path);
+    $('startMsg').textContent = res.pcsx2 ? `PCSX2: ${res.pcsx2}` : 'PCSX2 som nenašiel; hru spustíš ručne.';
+  } catch (e) {
+    $('gameList').textContent = e.message;
+  }
+}
+
+async function openGame() {
+  const path = $('gamePath').value.trim();
+  if (!path) return;
+  $('startMsg').textContent = 'otváram…';
+  try {
+    await api('/api/open', { path, compare: $('comparePath').value || null });
+    location.reload();
+  } catch (e) {
+    $('startMsg').textContent = e.message;
+  }
+}
+
+async function play() {
+  try {
+    const res = await api('/api/play', {});
+    log(res.message, 'ok');
+  } catch (e) {
+    log(e.message, 'err');
+  }
+}
+
+$('openGame').addEventListener('click', openGame);
+$('refreshGames').addEventListener('click', () => showStart(!$('closeStart').classList.contains('hidden')));
+$('closeStart').addEventListener('click', () => $('startScreen').classList.add('hidden'));
+$('otherGame').addEventListener('click', () => showStart(true));
+$('gamePath').addEventListener('keydown', (e) => { if (e.key === 'Enter') openGame(); });
+$('play').addEventListener('click', play);
+
 async function start() {
   resize();
   animate();
   try {
     const info = await api('/api/info');
+    if (!info.loaded) { showStart(false); return; }
+    $('gameName').textContent = info.source.split('/').pop() + (info.compare ? ` · porovnanie s ${info.compare.split('/').pop()}` : '');
+    $('play').disabled = !(info.saved || /\.iso$/i.test(info.source));
     $('output').value = info.output;
     for (const c of info.courses) {
       const opt = document.createElement('option');

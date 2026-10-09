@@ -14,6 +14,10 @@
 <body>
 <aside id="panel">
   <h1>SSX 3 · editor mapy</h1>
+  <div class="row">
+    <button id="otherGame" class="small">Otvoriť inú hru</button>
+    <span class="muted small-text" id="gameName"></span>
+  </div>
 
   <section>
     <label>Trať
@@ -46,12 +50,21 @@
   </section>
 
   <section>
-    <label>Recept (celá nová trať naraz)
-      <select id="recipe"></select>
+    <label>Nová trať naraz
+      <select id="recipe">
+        <option value="__flat__">Rovný svah so skokmi (zmaže túto trať)</option>
+      </select>
     </label>
+    <div id="flatParams" class="grid2">
+      <label>sklon % <input type="number" id="flatGrade" value="15" step="1" min="2" max="60"></label>
+      <label>šírka m <input type="number" id="flatWidth" value="60" step="5" min="20"></label>
+      <label>mantinely m <input type="number" id="flatWalls" value="12" step="1" min="0"></label>
+      <label>skok každých m <input type="number" id="flatEvery" value="350" step="50" min="0"></label>
+      <label>výšky skokov m <input type="text" id="flatHeights" value="3,4,5"></label>
+    </div>
     <div class="row">
-      <button id="applyRecipe" class="small">Použiť recept</button>
-      <label class="check"><input type="checkbox" id="recipeNoWarp"> bez ohybov</label>
+      <button id="applyRecipe" class="small">Postaviť</button>
+      <label class="check hidden" id="recipeNoWarpLabel"><input type="checkbox" id="recipeNoWarp"> bez ohybov</label>
     </div>
     <div id="marks" class="marks"></div>
   </section>
@@ -155,6 +168,7 @@
     </div>
     <label>Uložiť ako <input type="text" id="output"></label>
     <button id="save" class="primary">Uložiť upravenú hru</button>
+    <button id="play" class="primary play" disabled>Spustiť v PCSX2</button>
   </section>
 
   <section>
@@ -164,6 +178,23 @@
 
 <main id="view"></main>
 <div id="tip" class="hidden"></div>
+<div id="startScreen" class="start hidden">
+  <div class="start-box">
+    <h1>SSX 3 · editor mapy</h1>
+    <p class="muted">Vyber hru, ktorú chceš otvoriť. ISO hľadám v Dokumentoch, Stiahnutých súboroch a na Ploche.</p>
+    <div id="gameList" class="game-list">hľadám hry…</div>
+    <label>Cesta k ISO <input type="text" id="gamePath" placeholder="/Users/…/SSX 3 (USA).iso"></label>
+    <label>Porovnať zmeny s
+      <select id="comparePath"></select>
+    </label>
+    <div class="row">
+      <button id="openGame" class="primary">Otvoriť</button>
+      <button id="refreshGames" class="small">Hľadať znova</button>
+      <button id="closeStart" class="small hidden">Zrušiť</button>
+    </div>
+    <div id="startMsg" class="muted"></div>
+  </div>
+</div>
 <div id="busy" class="hidden"><div class="spinner"></div><span id="busyText">pracujem…</span></div>
 
 <script type="module" src="/static/app.js"></script>

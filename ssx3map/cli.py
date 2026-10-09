@@ -414,9 +414,13 @@ def cmd_objects(args):
 
 
 def cmd_editor(args):
+    """Without an input the page asks which game to open (it finds the disc images itself)."""
+    from .editor import games
     from .editor.server import serve
-    w = _open(args.input)
+    w = _open(args.input) if args.input else None
     ref = _open(args.compare) if args.compare else None
+    if w is not None:
+        games.remember(w.source)
     serve(w, port=args.port, open_browser=not args.no_browser, reference=ref)
 
 
@@ -536,11 +540,18 @@ def main(argv=None):
     sp.add_argument('-o', '--output', help='output .iso or .BIG')
     sp.add_argument('-v', '--verbose', action='store_true')
 
-    sp = add('editor', cmd_editor, 'open the map editor in the browser (three.js)')
+    sp = sub.add_parser('editor', help='open the map editor in the browser (three.js)',
+                        description='open the map editor in the browser; without INPUT the page lets you pick the game')
+    sp.add_argument('input', nargs='?', help='the disc image (.iso) or BAM.BIG (optional)')
+    sp.set_defaults(fn=cmd_editor)
     sp.add_argument('--port', type=int, default=8765)
     sp.add_argument('--no-browser', action='store_true', help='do not open a browser window')
     sp.add_argument('--compare', metavar='ORIGINAL', help='the untouched game: show what differs from it')
 
+    if argv is None:
+        argv = sys.argv[1:]
+    if not argv:                                   # plain `python3 -m ssx3map`: the editor
+        argv = ['editor']
     args = p.parse_args(argv)
     args.fn(args)
 
