@@ -32,7 +32,8 @@ button.danger { color: #ffcdd2; border-color: #7a2e2e; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 8px; }
 .grid2.disabled label { opacity: .5; }
 .tabs { display: flex; gap: 4px; margin-bottom: 8px; }
-.tab { flex: 1; }
+.tab { flex: 1; padding: 6px 4px; font-size: 12px; }
+button.active { background: #7a5d10; border-color: #c9a227; }
 .tab.active { background: #1d5d80; border-color: #2b7aa6; }
 .tool.hidden, .hidden { display: none !important; }
 .muted { color: var(--muted); }

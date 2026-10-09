@@ -410,3 +410,95 @@ def terrain_edit(world, code, frame, z, shape, height, force=False, carry=True, 
 
 def move_object(world, chunk, offset, d):
     instances.translate(world.stream.chunk(chunk), offset, *d)
+
+
+BRUSHES = ('raise', 'lower', 'flatten', 'smooth')
+
+
+def course_index(world, code):
+    return terrain.PatchIndex(p for _, _, p in patches(world, course_locations(world, code)))
+
+
+def stroke_edit(world, code, points, mode, radius, height=0.0, strength=1.0, force=False, carry=True):
+    """One brush stroke: `points` [(x, y)] in cm, `radius` and `height` in metres.
+
+    flatten levels to the terrain height under the first point (+ `height`).
+    Refuses and rolls back like terrain_edit. Returns the report."""
+    if mode not in BRUSHES:
+        raise EditRefused(f'unknown brush {mode!r}')
+    if not points:
+        raise EditRefused('empty stroke')
+    if abs(height) > 60 and not force:
+        raise EditRefused('heights beyond 60 m are refused without force')
+    if len(points) > 400:                      # plenty for one stroke; keeps the field cheap
+        step = len(points) / 400
+        points = [points[int(i * step)] for i in range(400)] + [points[-1]]
+    index = course_index(world, code)
+    target = None
+    if mode == 'flatten':
+        z0 = index.z(*points[0])
+        if z0 is None:
+            raise EditRefused('the stroke starts off the terrain')
+        target = z0 + height * CM
+    strength = min(1.0, max(0.0, strength))
+    dz = terrain.stroke(points, radius * CM, mode, height=height * CM, strength=strength, index=index,
+                        target=target)
+    snap = world.stream.snapshot(course_chunks(world, code))
+    report = apply_field(world, code, dz.frame, dz, carry_objects=carry, move_points=carry)
+    if not report.patches:
+        world.stream.restore(snap)
+        raise EditRefused('the stroke changed no terrain patch')
+    if mode in ('raise', 'lower'):
+        allowed = max(30.0, 0.15 * abs(height) * CM)
+    else:
+        allowed = max(30.0, 0.25 * report.max_dz)
+    if report.shape_error > allowed and not force:
+        world.stream.restore(snap)
+        raise EditRefused(f'the brush is too small for the terrain here: it would be off by up to '
+                          f'{report.shape_error / CM:.2f} m; use a larger radius or force it')
+    return report
+
+
+def place_object(world, code, chunk, offset, x, y):
+    """Move an object so that it stands on the terrain at (x, y) (cm). Returns the move."""
+    data = world.stream.current(chunk)
+    inst = instances.Instance(data[offset:offset + 0x90])
+    z = course_index(world, code).z(x, y)
+    if z is None:
+        raise EditRefused('that place is off the terrain')
+    cx, cy, _ = inst.centre
+    d = (x - cx, y - cy, z - inst.bbox[0][2])
+    instances.translate(world.stream.chunk(chunk), offset, *d)
+    return d
+
+
+def rotate_object(world, chunk, offset, degrees):
+    """Turn an object about the vertical axis through its origin.
+
+    The box is rebuilt from the box on the disc, turned by the total yaw since
+    then, so repeated turns do not make it grow."""
+    buf = world.stream.chunk(chunk)
+    instances.rotate_z(buf, offset, degrees)
+    orig = world.stream.chunk_original(chunk)[offset:offset + 0x90]
+    om = struct.unpack_from('<16f', orig, instances.MATRIX)
+    nm = struct.unpack_from('<16f', buf, offset + instances.MATRIX)
+    row = 0 if math.hypot(om[0], om[1]) > 1e-3 else 1
+    yaw = math.atan2(nm[4 * row + 1], nm[4 * row]) - math.atan2(om[4 * row + 1], om[4 * row])
+    c, s_ = math.cos(yaw), math.sin(yaw)
+    ot = om[12:15]
+    nt = nm[12:15]
+
+    def place(x, y):
+        dx, dy = x - ot[0], y - ot[1]
+        return nt[0] + dx * c - dy * s_, nt[1] + dx * s_ + dy * c
+
+    lo = struct.unpack_from('<3f', orig, instances.BBOX_MIN)
+    hi = struct.unpack_from('<3f', orig, instances.BBOX_MAX)
+    corners = [place(x, y) for x in (lo[0], hi[0]) for y in (lo[1], hi[1])]
+    dz = nt[2] - ot[2]
+    struct.pack_into('<3f', buf, offset + instances.BBOX_MIN, min(p[0] for p in corners),
+                     min(p[1] for p in corners), lo[2] + dz)
+    struct.pack_into('<3f', buf, offset + instances.BBOX_MAX, max(p[0] for p in corners),
+                     max(p[1] for p in corners), hi[2] + dz)
+    sx, sy, sz = struct.unpack_from('<3f', orig, instances.SPHERE)
+    struct.pack_into('<3f', buf, offset + instances.SPHERE, *place(sx, sy), sz + dz)

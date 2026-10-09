@@ -269,3 +269,124 @@ def surface_z(patches, x, y):
             if abs(p[0] - x) < 1 and abs(p[1] - y) < 1 and (best is None or p[2] > best):
                 best = p[2]
     return best
+
+
+class PatchIndex:
+    """Patches bucketed by XY so surface queries only look at nearby ones."""
+
+    def __init__(self, patches, cell=3000.0):
+        self.cell = cell
+        self.patches = list(patches)
+        self.cells = {}
+        for n, p in enumerate(self.patches):
+            lo, hi = p.bbox
+            for ix in range(math.floor(lo[0] / cell), math.floor(hi[0] / cell) + 1):
+                for iy in range(math.floor(lo[1] / cell), math.floor(hi[1] / cell) + 1):
+                    self.cells.setdefault((ix, iy), []).append(n)
+
+    def z(self, x, y):
+        near = self.cells.get((math.floor(x / self.cell), math.floor(y / self.cell)), ())
+        return surface_z((self.patches[n] for n in near), x, y)
+
+
+def _distance_to_polyline(x, y, points):
+    if len(points) == 1:
+        return math.hypot(x - points[0][0], y - points[0][1])
+    best = float('inf')
+    for (ax, ay), (bx, by) in zip(points, points[1:]):
+        dx, dy = bx - ax, by - ay
+        n = dx * dx + dy * dy
+        t = 0.0 if not n else min(1.0, max(0.0, ((x - ax) * dx + (y - ay) * dy) / n))
+        best = min(best, math.hypot(ax + dx * t - x, ay + dy * t - y))
+    return best
+
+
+def stroke(points, radius, mode, height=0.0, strength=1.0, index=None, target=None):
+    """Height field of one brush stroke along `points` [(x, y)] (cm).
+
+    raise/lower: a ridge or trench of `height` with a cosine profile `radius` wide;
+    flatten:     pull towards height `target` (cm);
+    smooth:      pull towards a blurred copy of the terrain (needs `index`).
+    The returned field carries .frame and .reach like the shape fields.
+    """
+    if not points:
+        raise ValueError('empty stroke')
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
+    reach = max(math.hypot(x - cx, y - cy) for x, y in points) + radius
+
+    def weight(x, y):
+        if abs(x - cx) > reach or abs(y - cy) > reach:
+            return 0.0
+        d = _distance_to_polyline(x, y, points)
+        return 0.5 + 0.5 * math.cos(math.pi * d / radius) if d < radius else 0.0
+
+    if mode in ('raise', 'lower'):
+        h = abs(height) * (1 if mode == 'raise' else -1)
+
+        def dz(x, y, z=None):
+            return h * weight(x, y)
+    elif mode == 'flatten':
+        if target is None:
+            raise ValueError('flatten needs a target height')
+
+        def dz(x, y, z=None):
+            w = weight(x, y)
+            return 0.0 if not w or z is None else (target - z) * w * strength
+    elif mode == 'smooth':
+        if index is None:
+            raise ValueError('smooth needs the terrain index')
+        blurred = _blurred_grid(index, cx, cy, reach + radius, radius)
+
+        def dz(x, y, z=None):
+            w = weight(x, y)
+            if not w or z is None:
+                return 0.0
+            b = blurred(x, y)
+            return 0.0 if b is None else (b - z) * w * strength
+    else:
+        raise ValueError(f'unknown brush {mode!r}')
+    dz.frame = Frame(cx, cy)
+    dz.reach = reach
+    return dz
+
+
+def _blurred_grid(index, cx, cy, half, radius):
+    """Bilinear lookup into the terrain heights around (cx, cy), box-blurred twice."""
+    step = max(150.0, radius / 6)
+    n = int(2 * half / step) + 1
+    x0, y0 = cx - half, cy - half
+    grid = [[index.z(x0 + i * step, y0 + j * step) for i in range(n)] for j in range(n)]
+    k = max(1, round(radius / 2 / step))
+
+    def blur_rows(rows):
+        out = []
+        for row in rows:
+            new = []
+            for i in range(len(row)):
+                vals = [v for v in row[max(0, i - k):i + k + 1] if v is not None]
+                new.append(sum(vals) / len(vals) if vals and row[i] is not None else None)
+            out.append(new)
+        return out
+
+    def transpose(rows):
+        return [list(col) for col in zip(*rows)]
+
+    for _ in range(2):
+        grid = transpose(blur_rows(transpose(blur_rows(grid))))
+
+    def lookup(x, y):
+        fx, fy = (x - x0) / step, (y - y0) / step
+        i, j = int(math.floor(fx)), int(math.floor(fy))
+        if not (0 <= i < n - 1 and 0 <= j < n - 1):
+            return None
+        tx, ty = fx - i, fy - j
+        cells = (grid[j][i], grid[j][i + 1], grid[j + 1][i], grid[j + 1][i + 1])
+        if any(v is None for v in cells):
+            known = [v for v in cells if v is not None]
+            return sum(known) / len(known) if known else None
+        a = cells[0] + (cells[1] - cells[0]) * tx
+        b = cells[2] + (cells[3] - cells[2]) * tx
+        return a + (b - a) * ty
+    return lookup

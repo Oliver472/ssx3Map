@@ -44,13 +44,35 @@
   <section>
     <div class="tabs" role="tablist">
       <button data-tool="view" class="tab active">Pozerať</button>
-      <button data-tool="terrain" class="tab">Terén</button>
+      <button data-tool="brush" class="tab">Štetec</button>
+      <button data-tool="terrain" class="tab">Tvary</button>
       <button data-tool="objects" class="tab">Objekty</button>
     </div>
 
     <div id="tool-view" class="tool">
       <p class="muted">Ľavé tlačidlo otáča, pravé posúva, koliesko približuje. Myšou nad terénom uvidíš
         súradnice a vzdialenosť od štartu.</p>
+    </div>
+
+    <div id="tool-brush" class="tool hidden">
+      <label>Štetec
+        <select id="brushMode">
+          <option value="raise">zdvihnúť</option>
+          <option value="lower">znížiť</option>
+          <option value="flatten">zarovnať</option>
+          <option value="smooth">vyhladiť</option>
+        </select>
+      </label>
+      <div class="grid2">
+        <label>polomer (m) <input type="number" id="brushRadius" step="1" placeholder="auto"></label>
+        <label id="brushHeightLabel">výška (m) <input type="number" id="brushHeight" value="2" step="0.5"></label>
+      </div>
+      <label id="brushStrengthLabel">sila: <span id="brushStrengthValue">0.7</span>
+        <input type="range" id="brushStrength" min="0.1" max="1" step="0.05" value="0.7">
+      </label>
+      <label class="check"><input type="checkbox" id="forceBrush"> vynútiť (aj nepresný tvar)</label>
+      <p class="muted">Ťahaj ľavým tlačidlom po teréne, po pustení sa ťah použije. Kameru otáčaš pravým tlačidlom,
+        posúvaš stredným. Prázdny polomer = podľa veľkosti plátov.</p>
     </div>
 
     <div id="tool-terrain" class="tool hidden">
@@ -81,10 +103,17 @@
       <div class="row">
         <button id="objUp" class="small" disabled>↑ 1 m</button>
         <button id="objDown" class="small" disabled>↓ 1 m</button>
+        <button id="objLeft" class="small" disabled>↺ 15°</button>
+        <button id="objRight" class="small" disabled>↻ 15°</button>
+      </div>
+      <div class="row">
+        <button id="objPlace" class="small" disabled>Premiestniť klikom (P)</button>
         <button id="objRemove" class="small danger" disabled>Odstrániť</button>
       </div>
       <label class="check"><input type="checkbox" id="forceObjects"> aj herné pomocné objekty</label>
-      <p class="muted">Vybraný objekt posunieš ťahaním šípok. Delete ho odstráni (presunie pod horu aj s kolíziou).</p>
+      <p class="muted">Vybraný objekt posunieš ťahaním šípok alebo ho klikom premiestniš inam (postaví sa na terén).
+        R ho otočí, Delete ho odstráni (presunie pod horu aj s kolíziou). Takto sa dajú stromy a iné objekty
+        z okolia použiť na novom mieste.</p>
     </div>
   </section>
 

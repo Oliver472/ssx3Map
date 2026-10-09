@@ -77,6 +77,7 @@ const state = {
   terrain: new THREE.Group(), objects: null, overlay: new THREE.Group(), brush: new THREE.Group(),
   tool: 'view', sel: null, index: null, line: null, textures: new Map(), framed: false,
   models: new THREE.Group(), sky: new THREE.Group(), packs: new Map(), selBox: null,
+  stroke: null, placing: false,
 };
 scene.add(state.terrain, state.overlay, state.brush, state.models, state.sky);
 
@@ -692,9 +693,46 @@ function rect(x, y, h, back, front, half) {
   return pts;
 }
 
+const BRUSH_COLOURS = { raise: 0xffeb3b, lower: 0x40c4ff, flatten: 0xffffff, smooth: 0x69f0ae };
+
+function brushRadius(x, y) {
+  const v = parseFloat($('brushRadius').value);
+  if (v > 0) return v;
+  return Math.max(12, 2 * (localPatchSize(x, y) || 10));
+}
+
+function drapedPath(points, colour, fallbackZ) {
+  let last = fallbackZ;
+  const out = points.map(([x, y]) => {
+    const z = surfaceZ(x, y);
+    if (z !== null) last = z;
+    return toScene([x, y, last + 50]);
+  });
+  return new THREE.Line(new THREE.BufferGeometry().setFromPoints(out),
+    new THREE.LineBasicMaterial({ color: colour, depthTest: false }));
+}
+
 function updateBrush(game) {
   disposeGroup(state.brush);
-  if (!game || state.tool !== 'terrain') return;
+  if (!game) return;
+  if (state.tool === 'brush') {
+    const [x, y, z] = game;
+    const mode = $('brushMode').value;
+    const r = (state.stroke ? state.stroke.radius : brushRadius(x, y)) * CM;
+    state.brush.add(drapedFan(x, y, circle(x, y, r), BRUSH_COLOURS[mode], z));
+    state.brush.add(drapedLoop(circle(x, y, r), BRUSH_COLOURS[mode], z));
+    if (state.stroke && state.stroke.points.length > 1) state.brush.add(drapedPath(state.stroke.points, BRUSH_COLOURS[mode], z));
+    return;
+  }
+  if (state.tool === 'objects' && state.placing && state.sel) {
+    const obj = state.course.objects.find((o) => o.k === state.sel.k);
+    if (obj) {
+      const r = Math.max(100, Math.hypot(obj.hi[0] - obj.lo[0], obj.hi[1] - obj.lo[1]) / 2);
+      state.brush.add(drapedLoop(circle(game[0], game[1], r), 0xffeb3b, game[2]));
+    }
+    return;
+  }
+  if (state.tool !== 'terrain') return;
   const [x, y, z] = game;
   const { dims, heading } = brushParams(x, y);
   const shape = $('shape').value;
@@ -734,6 +772,34 @@ async function applyTerrain(game) {
   }
 }
 
+async function commitStroke(stroke) {
+  const mode = $('brushMode').value;
+  const body = { code: state.code, points: stroke.points.map(([x, y]) => [x, y]), mode, radius: stroke.radius,
+    height: parseFloat($('brushHeight').value) || 0, strength: parseFloat($('brushStrength').value),
+    force: $('forceBrush').checked };
+  busy(true, 'upravujem terén…');
+  try {
+    const res = await api('/api/stroke', body);
+    log(res.message, 'ok');
+    await loadCourse(state.code, true);
+  } catch (e) {
+    log(e.message, 'err');
+  } finally {
+    busy(false);
+    updateBrush(null);
+  }
+}
+
+function syncBrushFields() {
+  const mode = $('brushMode').value;
+  $('brushHeightLabel').classList.toggle('hidden', mode === 'smooth');
+  $('brushStrengthLabel').classList.toggle('hidden', mode === 'raise' || mode === 'lower');
+  $('brushHeightLabel').firstChild.textContent = mode === 'flatten' ? 'posun výšky (m) ' : 'výška (m) ';
+  if (mode === 'flatten') $('brushHeight').value = 0;
+  else if (!(parseFloat($('brushHeight').value) > 0)) $('brushHeight').value = 2;
+  $('brushStrengthValue').textContent = $('brushStrength').value;
+}
+
 // ---------------------------------------------------------------- objects
 function select(obj) {
   state.sel = obj ? { k: obj.k } : null;
@@ -751,8 +817,16 @@ function select(obj) {
   } else {
     $('selection').textContent = 'Klikni na objekt (strom, budovu…).';
   }
-  for (const id of ['objUp', 'objDown', 'objRemove']) $(id).disabled = !obj;
+  for (const id of ['objUp', 'objDown', 'objRemove', 'objLeft', 'objRight', 'objPlace']) $(id).disabled = !obj;
+  setPlacing(false);
   buildObjects();
+}
+
+function setPlacing(on) {
+  state.placing = on && !!state.sel;
+  $('objPlace').classList.toggle('active', state.placing);
+  $('objPlace').textContent = state.placing ? 'Klikni do terénu… (Esc zruší)' : 'Premiestniť klikom (P)';
+  if (!state.placing) updateBrush(null);
 }
 
 function reselect() {
@@ -760,11 +834,11 @@ function reselect() {
   select(obj && obj.lo[2] > state.zmin - SINK_LIMIT ? obj : null);
 }
 
-async function objectAction(action, delta) {
+async function objectAction(action, extra = {}) {
   if (!state.sel) return;
   busy(true, 'upravujem objekt…');
   try {
-    const res = await api('/api/objects', { code: state.code, action, keys: [state.sel.k], delta,
+    const res = await api('/api/objects', { code: state.code, action, keys: [state.sel.k], ...extra,
       force: $('forceObjects').checked });
     log(res.message, 'ok');
   } catch (e) {
@@ -779,27 +853,57 @@ function commitMove() {
   if (!state.sel || !state.sel.start) return;
   const d = proxy.position.clone().sub(state.sel.start);
   if (d.length() < 0.01) return;
-  objectAction('move', [d.x * CM, -d.z * CM, d.y * CM]);
+  objectAction('move', { delta: [d.x * CM, -d.z * CM, d.y * CM] });
 }
 
 // ---------------------------------------------------------------- input
 let down = null;
 let lastMove = null;
-renderer.domElement.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY }; });
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  down = { x: e.clientX, y: e.clientY };
+  if (state.tool === 'brush' && e.button === 0 && state.course) {
+    setPointer(e);
+    const p = hitTerrain();
+    if (p) {
+      const g = toGame(p);
+      state.stroke = { points: [[g[0], g[1]]], radius: brushRadius(g[0], g[1]) };
+      renderer.domElement.setPointerCapture(e.pointerId);
+    }
+  }
+});
 renderer.domElement.addEventListener('pointerup', (e) => {
+  if (state.stroke) {
+    const stroke = state.stroke;
+    state.stroke = null;
+    down = null;
+    commitStroke(stroke);
+    return;
+  }
   if (!down) return;
   const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
   down = null;
-  if (moved > 5 || transform.dragging || transform.axis) return;
+  if (moved > 5 || transform.dragging || transform.axis || e.button !== 0) return;
   setPointer(e);
   if (state.tool === 'terrain') {
     const p = hitTerrain();
     if (p) applyTerrain(toGame(p));
   } else if (state.tool === 'objects') {
-    select(hitObject());
+    if (state.placing && state.sel) {
+      const p = hitTerrain();
+      if (p) { const g = toGame(p); setPlacing(false); objectAction('place', { x: g[0], y: g[1] }); }
+    } else select(hitObject());
   }
 });
-renderer.domElement.addEventListener('pointermove', (e) => { lastMove = e; });
+renderer.domElement.addEventListener('pointermove', (e) => {
+  lastMove = e;
+  if (!state.stroke) return;
+  setPointer(e);
+  const p = hitTerrain();
+  if (!p) return;
+  const g = toGame(p);
+  const last = state.stroke.points[state.stroke.points.length - 1];
+  if (Math.hypot(g[0] - last[0], g[1] - last[1]) >= state.stroke.radius * CM / 4) state.stroke.points.push([g[0], g[1]]);
+});
 renderer.domElement.addEventListener('pointerleave', () => { lastMove = null; $('tip').classList.add('hidden'); });
 
 function hover() {
@@ -809,7 +913,7 @@ function hover() {
   setPointer(e);
   const tip = $('tip');
   let text = null;
-  const obj = state.tool !== 'terrain' ? hitObject() : null;
+  const obj = !['terrain', 'brush'].includes(state.tool) && !state.placing ? hitObject() : null;
   if (obj) text = obj.n;
   else {
     const p = hitTerrain();
@@ -836,7 +940,9 @@ window.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); }
   else if ((e.key === 'Delete' || e.key === 'Backspace') && state.sel) objectAction('remove');
-  else if (e.key === 'Escape') select(null);
+  else if (e.key.toLowerCase() === 'p' && state.sel) setPlacing(!state.placing);
+  else if (e.key.toLowerCase() === 'r' && state.sel) objectAction('rotate', { degrees: e.shiftKey ? -15 : 15 });
+  else if (e.key === 'Escape') { if (state.placing) setPlacing(false); else select(null); }
 });
 
 for (const tab of document.querySelectorAll('.tab')) {
@@ -845,6 +951,10 @@ for (const tab of document.querySelectorAll('.tab')) {
     for (const t of document.querySelectorAll('.tab')) t.classList.toggle('active', t === tab);
     for (const t of document.querySelectorAll('.tool')) t.classList.toggle('hidden', t.id !== `tool-${state.tool}`);
     if (state.tool !== 'objects') select(null);
+    // Sculpting paints with the left button, so the camera moves to the right/middle buttons.
+    controls.mouseButtons = state.tool === 'brush'
+      ? { LEFT: null, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.ROTATE }
+      : { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
     updateBrush(null);
   });
 }
@@ -863,8 +973,14 @@ $('showRails').addEventListener('change', buildOverlay);
 $('along').addEventListener('input', () => flyAlong(parseFloat($('along').value)));
 $('toStart').addEventListener('click', () => flyAlong(0));
 $('course').addEventListener('change', () => { select(null); state.framed = false; loadCourse($('course').value, false); });
-$('objUp').addEventListener('click', () => objectAction('move', [0, 0, 100]));
-$('objDown').addEventListener('click', () => objectAction('move', [0, 0, -100]));
+$('objUp').addEventListener('click', () => objectAction('move', { delta: [0, 0, 100] }));
+$('objDown').addEventListener('click', () => objectAction('move', { delta: [0, 0, -100] }));
+$('objLeft').addEventListener('click', () => objectAction('rotate', { degrees: 15 }));
+$('objRight').addEventListener('click', () => objectAction('rotate', { degrees: -15 }));
+$('objPlace').addEventListener('click', () => setPlacing(!state.placing));
+$('brushMode').addEventListener('change', syncBrushFields);
+$('brushStrength').addEventListener('input', () => { $('brushStrengthValue').textContent = $('brushStrength').value; });
+syncBrushFields();
 $('objRemove').addEventListener('click', () => objectAction('remove'));
 $('undo').addEventListener('click', undo);
 $('save').addEventListener('click', save);

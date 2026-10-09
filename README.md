@@ -120,12 +120,20 @@ three.js sa sťahuje z CDN. Herné dáta ostávajú u teba, editor beží iba lo
 - **Pozerať:** ľavé tlačidlo otáča, pravé posúva, koliesko približuje.
   Posuvník „Kamera na trati“ ťa prenesie na zvolený meter trate. Myšou nad
   terénom vidíš súradnice a vzdialenosť od štartu.
-- **Terén:** vyber tvar (skok, kopec/jama, plošina, zarovnanie) a výšku.
+- **Štetec:** ťahaním ľavým tlačidlom po teréne ho zdvihneš, znížiš, zarovnáš
+  (na výšku miesta, kde ťah začal, plus voliteľný posun) alebo vyhladíš.
+  Ťah sa použije po pustení tlačidla. Kameru v tomto režime otáčaš pravým
+  tlačidlom a posúvaš stredným. Prázdny polomer znamená „podľa veľkosti
+  plátov“. Príliš malý štetec, ktorý by terén pokazil, editor odmietne.
+- **Tvary:** vyber tvar (skok, kopec/jama, plošina, zarovnanie) a výšku.
   Pod myšou sa ukáže obrys oblasti, ktorú úprava zasiahne, a klik ju
   vykoná. Skok sa natočí po smere trate, smer sa dá doladiť poľom
   „otočenie“. Rozmery sa nastavia podľa terénu, alebo ich zadáš ručne.
 - **Objekty:** klikni na objekt (strom, budovu…) a ťahaj šípky,
-  prípadne použi tlačidlá ↑/↓ alebo Odstrániť (aj kláves Delete). Herné
+  prípadne použi tlačidlá ↑/↓, otočenie o 15° (aj kláves R) alebo
+  Odstrániť (aj kláves Delete). **Premiestniť klikom** (kláves P) presunie
+  objekt na miesto, kam klikneš, a postaví ho na terén. Tak sa dajú stromy,
+  skaly a iné objekty z okolia použiť na novej časti trate. Herné
   pomocné objekty (oranžové) sú bez zaškrtnutia „pomocné objekty“ skryté.
 - **Späť** (Ctrl+Z) vráti poslednú úpravu.
 - **Uložiť upravenú hru** zapíše nové ISO. Pôvodné ostane nedotknuté.

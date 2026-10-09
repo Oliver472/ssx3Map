@@ -255,6 +255,22 @@ class Session:
                                     if report.rails_in_area else '')),
                         dims={k: round(v, 1) for k, v in dims.items()}, unit=round(unit, 1))
 
+    def stroke(self, req):
+        w = self.world
+        code = req['code']
+        with self.lock:
+            points = [(float(x), float(y)) for x, y in req['points']]
+            snap = w.stream.snapshot(mapedit.course_chunks(w, code))
+            report = mapedit.stroke_edit(w, code, points, req['mode'], float(req['radius']),
+                                         height=float(req.get('height') or 0), strength=float(req.get('strength', 1)),
+                                         force=bool(req.get('force')), carry=req.get('carry', True))
+            names = {'raise': 'zdvihnutie', 'lower': 'zníženie', 'flatten': 'zarovnanie', 'smooth': 'vyhladenie'}
+            label = f"štetec: {names.get(req['mode'], req['mode'])}, {len(points)} bodov"
+            self._push(label, snap)
+            return dict(message=(f'{label}: {report.patches} plátov, najväčší posun {report.max_dz / 100:.2f} m, '
+                                 f'odchýlka {report.shape_error / 100:.2f} m, objekty {report.objects}, '
+                                 f'zábradlia {report.rails}, štart/reset body {report.points}'))
+
     def objects(self, req):
         w = self.world
         with self.lock:
@@ -273,18 +289,22 @@ class Session:
                     skipped += 1
                     continue
                 if action == 'remove':
-                    d = (0.0, 0.0, mapedit.SINK)
+                    mapedit.move_object(w, c, rec.offset, (0.0, 0.0, mapedit.SINK))
                 elif action == 'move':
-                    d = tuple(float(v) for v in req['delta'])
+                    mapedit.move_object(w, c, rec.offset, tuple(float(v) for v in req['delta']))
+                elif action == 'place':
+                    mapedit.place_object(w, req['code'], c, rec.offset, float(req['x']), float(req['y']))
+                elif action == 'rotate':
+                    mapedit.rotate_object(w, c, rec.offset, float(req['degrees']))
                 else:
                     raise mapedit.EditRefused(f'unknown action {action!r}')
-                mapedit.move_object(w, c, rec.offset, d)
                 done += 1
             if not done:
                 w.stream.restore(snap)
                 raise mapedit.EditRefused('nothing changed' + (f' ({skipped} game helper objects need "force")'
                                                                if skipped else ''))
-            label = f'{"odstránenie" if action == "remove" else "posun"} {done} objektov'
+            verbs = dict(remove='odstránenie', move='posun', place='premiestnenie', rotate='otočenie')
+            label = f'{verbs.get(action, action)} {done} objektov'
             self._push(label, snap)
             return dict(message=label + (f'; vynechané pomocné: {skipped}' if skipped else ''))
 
@@ -369,7 +389,8 @@ class Handler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             return self._send(400, dict(error='bad JSON'))
         s = self.session
-        routes = {'/api/terrain': lambda: s.terrain(req), '/api/objects': lambda: s.objects(req),
+        routes = {'/api/terrain': lambda: s.terrain(req), '/api/stroke': lambda: s.stroke(req),
+                  '/api/objects': lambda: s.objects(req),
                   '/api/undo': s.undo_last, '/api/save': lambda: s.save(req['output'])}
         if url.path not in routes:
             return self._send(404, dict(error='not found'))

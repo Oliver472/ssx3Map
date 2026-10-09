@@ -44,6 +44,29 @@ await page.screenshot({ path: path.join(out, 'editor-2-terrain.png') });
 let text = await logText();
 check(/plátov/.test(text), `terrain edit applied: ${text.split('\n')[0]}`);
 
+// Brush: drag a stroke across the middle of the view (left button paints in this mode).
+await page.click('button[data-tool=brush]');
+await page.selectOption('#brushMode', 'raise');
+await page.fill('#brushHeight', '1.5');
+const onLine = (metres) => page.evaluate((d) => {
+  const s = window.ssxEditor.state;
+  const { p } = s.line.at(d * 100);
+  const o = s.origin;
+  const v = window.ssxEditor.project((p[0] - o[0]) / 100, (p[2] - o[2]) / 100, -(p[1] - o[1]) / 100);
+  const r = document.querySelector('#view').getBoundingClientRect();
+  return { x: r.left + (v.x + 1) / 2 * r.width, y: r.top + (1 - v.y) / 2 * r.height };
+}, metres);
+const a = await onLine(15), b = await onLine(35);
+await page.mouse.move(a.x, a.y);
+await page.mouse.down();
+for (let k = 1; k <= 12; k++) await page.mouse.move(a.x + (b.x - a.x) * k / 12, a.y + (b.y - a.y) * k / 12, { steps: 2 });
+await page.mouse.up();
+await page.waitForFunction(() => /štetec: zdvihnutie|brush|stroke/.test(document.querySelector('#log').innerText), null, { timeout: 30000 });
+text = await logText();
+check(/štetec: zdvihnutie, \d+ bodov: \d+ plátov/.test(text), `brush stroke: ${text.split('\n')[0]}`);
+await page.click('#undo');
+await page.waitForFunction(() => (document.querySelector('#log').innerText.match(/späť/g) || []).length >= 1, null, { timeout: 30000 });
+
 // Undo.
 await page.click('#undo');
 await page.waitForFunction(() => /späť/.test(document.querySelector('#log').innerText), null, { timeout: 30000 });
@@ -73,6 +96,14 @@ if (target) {
   await page.click('#objUp');
   await page.waitForFunction(() => /posun 1 objektov/.test(document.querySelector('#log').innerText), null, { timeout: 30000 });
   check(true, 'object raised');
+  await page.click('#objLeft');
+  await page.waitForFunction(() => /otočenie 1 objektov/.test(document.querySelector('#log').innerText), null, { timeout: 30000 });
+  check(true, 'object rotated');
+  await page.click('#objPlace');
+  const spot = await onLine(25);
+  await page.mouse.click(spot.x + 25, spot.y);
+  await page.waitForFunction(() => /premiestnenie 1 objektov|off the terrain/.test(document.querySelector('#log').innerText), null, { timeout: 30000 });
+  check(/premiestnenie 1 objektov/.test(await logText()), 'object placed by click');
 }
 
 // Save.

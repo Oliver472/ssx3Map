@@ -12,6 +12,7 @@ moves its collision with it.
 """
 from __future__ import annotations
 
+import math
 import struct
 
 MATRIX = 0x10
@@ -50,3 +51,29 @@ def translate(buf, offset, dx, dy, dz):
     for base in (TRANSLATION, SPHERE, BBOX_MIN, BBOX_MAX):
         values = struct.unpack_from('<3f', buf, offset + base)
         struct.pack_into('<3f', buf, offset + base, *(v + e for v, e in zip(values, d)))
+
+
+def rotate_z(buf, offset, degrees):
+    """Turn the instance about the vertical axis through its origin (collision turns with it).
+
+    The matrix is row-vector style (world = v * M), so each rotation row r becomes
+    r * Rz. The box is rebuilt from its rotated corners (conservative)."""
+    a = math.radians(degrees)
+    c, s = math.cos(a), math.sin(a)
+    for row in range(3):
+        at = offset + MATRIX + 16 * row
+        x, y, z = struct.unpack_from('<3f', buf, at)
+        struct.pack_into('<3f', buf, at, x * c - y * s, x * s + y * c, z)
+    tx, ty, _ = struct.unpack_from('<3f', buf, offset + TRANSLATION)
+
+    def turn(x, y):
+        dx, dy = x - tx, y - ty
+        return tx + dx * c - dy * s, ty + dx * s + dy * c
+
+    lo = struct.unpack_from('<3f', buf, offset + BBOX_MIN)
+    hi = struct.unpack_from('<3f', buf, offset + BBOX_MAX)
+    corners = [turn(x, y) for x in (lo[0], hi[0]) for y in (lo[1], hi[1])]
+    struct.pack_into('<3f', buf, offset + BBOX_MIN, min(p[0] for p in corners), min(p[1] for p in corners), lo[2])
+    struct.pack_into('<3f', buf, offset + BBOX_MAX, max(p[0] for p in corners), max(p[1] for p in corners), hi[2])
+    sx, sy, sz = struct.unpack_from('<3f', buf, offset + SPHERE)
+    struct.pack_into('<2f', buf, offset + SPHERE, *turn(sx, sy))
