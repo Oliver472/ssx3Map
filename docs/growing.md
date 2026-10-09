@@ -54,6 +54,12 @@ Stop at the first test that fails. Send back which tests worked and `probe_repor
   and drawn with it. They stay inside the course's existing terrain box, so the chunk boxes in
   `bam.sdb` need no change yet.
 
+## Results so far
+
+First round: tests 1 to 5 worked, test 6 (+100 % patches) did not. So BAM.BIG can grow and move
+to the end of the disc, chunks can grow and shift, new terrain patches work, and Snow Jam takes
+at least +50 % more patches (see [findings.md](findings.md)).
+
 ## If a test fails
 
 - **1 fails:** the game does not look the file up on the disc; growing would have to use the

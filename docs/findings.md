@@ -109,3 +109,21 @@ but the surface was invisible.
 - So every new patch copies the streaming chunk, texture and layer word from the old patch
   that was at the same distance along the course. Whether this fixes the invisible surface
   still has to be confirmed in PCSX2.
+
+# Growing the world (`probe`, first round in PCSX2)
+
+Tests 1 to 5 worked in PCSX2; test 6 did not.
+
+- **BAM.BIG can move.** With the file at the end of the disc and its old sectors zeroed, the
+  game still runs: it finds BAM.BIG through the ISO 9660 directory, so a bigger BAM.BIG can
+  live at the end of the image.
+- **Chunks can move.** With the first chunk one block longer and every other chunk shifted, the
+  game still runs: it finds chunks through the sub-chunk offsets (`+4`) in `bam.sdb`. A chunk
+  can therefore grow by whole blocks.
+- **Records can be added.** One new terrain patch on Snow Jam worked: a ramp with the next free
+  rid, inserted after the last terrain record, with the record count (`+0`), the kind-1 count
+  and the size (`+8`) of its sub-chunk info and the location's kind-1 count updated.
+- **Memory.** Snow Jam's main chunk (ARA1, 3 675 patches) worked with +10 % and +50 % more
+  patches (tiny ones, hidden under the ground) but not with +100 %. The limit is between about
+  +1 840 and +3 675 patches (+0.8 to +1.6 MB decoded). Until it is narrowed down, +50 % is the
+  tested headroom.
