@@ -9,7 +9,7 @@ import sys
 import time
 
 from . import aip as aipmod
-from . import instances, mapedit, painter, recipe, terrain, texture, warp
+from . import instances, mapedit, painter, rebuild, recipe, terrain, texture, warp
 from .world import KIND_NAMES, World, resolve_input
 
 
@@ -322,6 +322,55 @@ def cmd_build(args):
     _save(args, w)
 
 
+def cmd_flat(args):
+    w = _open(args.input)
+    _check_output(args, w)
+    code = args.location
+    course = mapedit.course_aip(w, code)
+    if course is None:
+        raise SystemExit(f'error: {code} has no race line')
+    length = aipmod.course_line(course).length / 100
+    jumps = None
+    if args.jumps:
+        heights = [float(v) for v in args.jump_heights.split(',')] if args.jump_heights else [3.0, 4.0, 5.0]
+        jumps = [(float(m), heights[k % len(heights)]) for k, m in enumerate(args.jumps.split(','))]
+    elif args.no_jumps:
+        jumps = []
+    design = rebuild.Design(grade=args.grade / 100, width=args.width, bank=args.wall_width,
+                            bank_height=args.wall_height, jumps=jumps)
+    print(f'{code}: zmažem trať ({length:.0f} m) a postavím rovný svah so sklonom {args.grade:.0f} %, '
+          f'šírka {args.width:.0f} m, mantinely {args.wall_height:.0f} m')
+    t = time.time()
+    try:
+        r = rebuild.flatten_course(w, code, design, log=print)
+    except mapedit.EditRefused as e:
+        raise SystemExit(f'error: {e}; nothing written')
+    print(f'  skoky: ' + ', '.join(f'{m:.0f} m ({h:.0f} m)' for m, h in r.jumps))
+    print(f'  pláty: {r.used} z {r.slots} (zvyšok schovaný pod horou), riadky {r.rows} x {r.cols}, '
+          f'dĺžka plátov {r.fine / 100:.1f}..{r.coarse / 100:.1f} m')
+    print(f'  trasa vyhladená (o najviac {r.shift / 100:.0f} m od pôvodnej), pokles {r.drop / 100:.0f} m, '
+          f'textúra {r.texture}')
+    print(f'  zmazané: {r.sunk} objektov, {r.rails} zábradlí, {r.lights} svetiel, {r.particles} častíc, '
+          f'{r.curtains} zásten; ponechané pomocné objekty {r.helpers}')
+    print(f'  na novom svahu: AI/pretekové trasy {r.paths}, štart/reset body {r.points}, '
+          f'ukazovateľ postupu {r.gates}, kamery {r.cameras}'
+          + (f'; neposunuté: {", ".join(r.untouched)}' if r.untouched else ''))
+    line = aipmod.course_line(mapedit.course_aip(w, code))
+    print(f'  trať po prestavbe: {line.length / 100:.0f} m ({time.time() - t:.0f} s)')
+    for c in w.stream.changed_chunks():
+        short = w.stream.shortfall(c)
+        if short > 0:
+            raise SystemExit(f'error: the new course does not fit the game data (chunk {c}, ~{short} bytes); '
+                             'nothing written')
+    if args.map:
+        with open(args.map, 'w', encoding='utf-8') as f:
+            f.write(mapedit.svg_map(w, code))
+        print(f'mapa: {args.map}')
+    print(f'ukladám {args.output} (pár minút)…', flush=True)
+    args.verbose = True
+    _save(args, w)
+
+
 def cmd_objects(args):
     w = _open(args.input)
     _check_output(args, w)
@@ -457,6 +506,19 @@ def main(argv=None):
     sp = add('build', cmd_build, 'build a new course layout from a recipe (many edits in one go)')
     sp.add_argument('recipe', help=f'recipe .json file or a built-in recipe: {", ".join(recipe.builtin_names())}')
     sp.add_argument('--skip', action='append', choices=recipe.OPS, help='leave out steps of this kind (repeatable)')
+    sp.add_argument('--map', help='also draw the new course from above as SVG')
+    sp.add_argument('-o', '--output', required=True, help='output .iso or .BIG')
+    sp.add_argument('-v', '--verbose', action='store_true')
+
+    sp = add('flat', cmd_flat, 'wipe a course and build a plain slope with jumps on its route (same length)')
+    sp.add_argument('--location', default='ARA1', help='course code (default ARA1, Snow Jam)')
+    sp.add_argument('--grade', type=float, default=15.0, help='slope in %% (default 15)')
+    sp.add_argument('--width', type=float, default=60.0, help='piste width in metres (default 60)')
+    sp.add_argument('--wall-width', type=float, default=20.0, help='side walls, metres (default 20)')
+    sp.add_argument('--wall-height', type=float, default=12.0, help='side walls, metres high (default 12)')
+    sp.add_argument('--jumps', help='metres after the start, comma separated (default: every 350 m)')
+    sp.add_argument('--jump-heights', help='metres, comma separated, repeated over the jumps (default 3,4,5)')
+    sp.add_argument('--no-jumps', action='store_true')
     sp.add_argument('--map', help='also draw the new course from above as SVG')
     sp.add_argument('-o', '--output', required=True, help='output .iso or .BIG')
     sp.add_argument('-v', '--verbose', action='store_true')

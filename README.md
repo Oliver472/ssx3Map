@@ -147,6 +147,35 @@ príkazovom riadku. Kroky:
 python3 -m ssx3map build "SSX 3 (USA).iso" moja_trat.json --map moja.svg -o SSX3_moja.iso
 ```
 
+## Rovný svah namiesto trate
+
+Príkaz `flat` zmaže trať a na jej mieste postaví nový terén. Je to rovná
+zjazdovka s jemným sklonom, mantinelmi po stranách a skokmi s doskočiskom.
+Ide po trase pôvodnej trate (vyhladenej), takže má rovnakú vodorovnú
+dĺžku a ostáva v pôvodnom priestore hry.
+
+```
+python3 -m ssx3map flat "SSX 3 (USA).iso" --map rovina.svg -o SSX3_rovina.iso
+```
+
+Predvolene prestavia Snow Jam (`--location ARA1`): sklon 15 %, šírka 60 m,
+mantinely 12 m, skok každých 350 m (3, 4, 5 m). Dá sa to zmeniť, napr.
+`--grade 10 --width 80 --jumps 300,700,1200 --jump-heights 4,6`, alebo
+`--no-jumps`.
+
+Čo sa stane:
+- **Terén:** všetky pláty trate sa použijú na nový svah. Čo zvýši, sa schová
+  1 km pod štart.
+- **Zmazané:** stromy, budovy, zábradlia, svetlá, častice a zásteny
+  viditeľnosti sa presunú 1 km pod horu.
+- **Prenesené na nový svah:** štart, cieľ, checkpointy, AI jazdci, reset
+  body, ukazovateľ postupu, kamery a herné pomocné objekty (štart, cieľ,
+  triggery).
+- **Svetlo:** hra má tiene zapečené. Každý plát preto dostane jas podľa
+  toho, ako je natočený k slnku, aby bolo skoky a mantinely vidno.
+
+Spojky k iným tratiam (napr. `A_ARA1`) ostanú pôvodné.
+
 ## Editor v prehliadači (three.js)
 
 Najpohodlnejšie sa mapa upravuje v 3D editore:
