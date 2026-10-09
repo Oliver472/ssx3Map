@@ -291,6 +291,25 @@ class WorldTest(unittest.TestCase):
         (c2, r2), = w2.records(kind=15, location='A_AAA')
         self.assertEqual(painter.fog_entries(w2.record_bytes(c2, r2))[0][1]['g'], 1.0)
 
+    def test_folder_input(self):
+        # A folder holding the .iso (as the redump archive extracts) ...
+        folder = self.path('SSX 3 (USA)')
+        os.makedirs(folder)
+        iso_path = os.path.join(folder, 'SSX 3 (USA).iso')
+        with open(iso_path, 'wb') as f:
+            f.write(fixtures.build_iso(self.big))
+        self.assertEqual(World(folder).source, iso_path)
+        self.assertTrue(World(folder).is_iso)
+        # ... or an extracted disc with DATA/WORLDS/BAM.BIG.
+        extracted = self.path('extracted')
+        os.makedirs(os.path.join(extracted, 'DATA', 'WORLDS'))
+        big_path = os.path.join(extracted, 'DATA', 'WORLDS', 'BAM.BIG')
+        with open(big_path, 'wb') as f:
+            f.write(self.big)
+        self.assertEqual(World(extracted).source, big_path)
+        with self.assertRaises(ValueError):
+            World(self.path('png-missing') if os.makedirs(self.path('png-missing')) is None else None)
+
     def test_refuses_to_overwrite_input(self):
         w = World(self.big_path)
         w.stream.chunk(0)[100] ^= 1

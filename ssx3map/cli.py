@@ -8,13 +8,17 @@ import sys
 import time
 
 from . import painter, texture
-from .world import KIND_NAMES, World
+from .world import KIND_NAMES, World, resolve_input
 
 
 def _open(path):
     t = time.time()
-    w = World(path)
-    print(f'loaded {path} ({"disc image" if w.is_iso else "BAM.BIG"}): {len(w.sdb.locations)} locations, '
+    try:
+        resolved = resolve_input(path)
+    except (OSError, ValueError) as e:
+        raise SystemExit(f'error: {e}')
+    w = World(resolved)
+    print(f'loaded {w.source} ({"disc image" if w.is_iso else "BAM.BIG"}): {len(w.sdb.locations)} locations, '
           f'{len(w.stream)} chunks, {len(w.stream.blocks)} blocks ({time.time() - t:.1f}s)', file=sys.stderr)
     return w
 
@@ -197,7 +201,7 @@ def main(argv=None):
 
     def add(name, fn, help_text):
         sp = sub.add_parser(name, help=help_text, description=help_text)
-        sp.add_argument('input', help='BAM.BIG, or the whole disc image (.iso)')
+        sp.add_argument('input', help='the disc image (.iso), BAM.BIG, or a folder holding either')
         sp.set_defaults(fn=fn)
         return sp
 

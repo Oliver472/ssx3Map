@@ -46,8 +46,52 @@ def resource_names(phm, psm):
     return groups
 
 
+def _find_ci(base, parts):
+    """Case-insensitive lookup of base/parts[0]/parts[1]/..., or None."""
+    path = base
+    for part in parts:
+        try:
+            names = os.listdir(path)
+        except OSError:
+            return None
+        match = next((n for n in names if n.lower() == part.lower()), None)
+        if match is None:
+            return None
+        path = os.path.join(path, match)
+    return path
+
+
+def resolve_input(path):
+    """Accept a disc image, a BAM.BIG, or a folder holding either.
+
+    A folder may contain the .iso (directly or one level down), or be an
+    extracted disc with DATA/WORLDS/BAM.BIG inside.
+    """
+    if not os.path.exists(path):
+        raise FileNotFoundError(f'{path} does not exist')
+    if not os.path.isdir(path):
+        return path
+    isos = []
+    for root, dirs, files in os.walk(path):
+        depth = os.path.relpath(root, path).count(os.sep) + (root != path)
+        if depth > 1:
+            dirs[:] = []
+            continue
+        isos += [os.path.join(root, f) for f in files if f.lower().endswith('.iso') and not f.startswith('._')]
+    if len(isos) == 1:
+        return isos[0]
+    if len(isos) > 1:
+        raise ValueError('the folder holds several .iso files; name one:\n  ' + '\n  '.join(sorted(isos)))
+    big = _find_ci(path, BIG_PATH.split('/')) or _find_ci(path, ['BAM.BIG'])
+    if big:
+        return big
+    listing = ', '.join(sorted(os.listdir(path))[:20]) or '(empty)'
+    raise ValueError(f'no .iso and no DATA/WORLDS/BAM.BIG in folder {path}; it contains: {listing}')
+
+
 class World:
     def __init__(self, source):
+        source = resolve_input(source)
         self.source = source
         self.iso_entry = None
         with open(source, 'rb') as f:
