@@ -43,8 +43,8 @@ Members: `bam.sdb` (32 780), `bam.ssb` (109 051 904), `bam.phm`, `bam.psm`, `ser
 u16 × 13 record counts of kinds 0..12, …, 7 × u32 zeros`. Checked on 159/159 chunks.
 - The size equals the decoded size for the 110 texture chunks. For main chunks it is
   smaller. For ASKY the difference is exactly 268 B, the sum of (8 + size) of the records of kinds
-  13, 14, 15, 16, 18, 20 and 22. Hypothesis: **size = Σ (8 + size) of the records of kinds 0..12**.
-  The next report will check it.
+  13, 14, 15, 16, 18, 20 and 22: **size = Σ (8 + size) of the records of kinds 0..12**
+  (confirmed on all 159 chunks by the probe report).
 - 28 shorts in the location record: the first 23 are record counts per kind. They match the
   records of the last chunk for 43 of 49 locations (not for TRANSP and the 5 skies, which keep
   textures in the main chunk). Hypothesis: only records on the location's own track are counted.
@@ -123,7 +123,19 @@ Tests 1 to 5 worked in PCSX2; test 6 did not.
 - **Records can be added.** One new terrain patch on Snow Jam worked: a ramp with the next free
   rid, inserted after the last terrain record, with the record count (`+0`), the kind-1 count
   and the size (`+8`) of its sub-chunk info and the location's kind-1 count updated.
-- **Memory.** Snow Jam's main chunk (ARA1, 3 675 patches) worked with +10 % and +50 % more
-  patches (tiny ones, hidden under the ground) but not with +100 %. The limit is between about
-  +1 840 and +3 675 patches (+0.8 to +1.6 MB decoded). Until it is narrowed down, +50 % is the
-  tested headroom.
+- **Memory.** Snow Jam's main chunk (ARA1, chunk 33) holds 1 913 patches in 6 875 records,
+  5 155 109 bytes decoded in 78 blocks. With +50 % patches (+956: 7 832 records, 5.58 MB, 89
+  blocks, size field 5 156 036) it worked; with +100 % (+1 913: 8 789 records, 6.00 MB, 95 blocks,
+  size field 5 577 116) it did not. The limit is one of these; a record table of 8 192 entries
+  would fit the result. Until it is narrowed down, +50 % patches is the tested headroom.
+
+From the same report:
+- The sub-chunk size field (`+8`) is the sum of (8 + size) over the records of kinds 0..12 in
+  all 159 chunks: the hypothesis of the second report holds.
+- The first 23 shorts of a location record are its per-kind record counts on its own track
+  (49/49 locations).
+- The 183 chunk infos are a tree: 116 leaves (ints `-1, -1, chunk, 0`) and 67 inner nodes
+  whose first two ints are their children (e.g. `6, 7, -1, 0`).
+- BAM.BIG (sector 865 271) is followed directly by `DATA/AUDIO/MUSIC.BIG`, with no free sectors,
+  so a grown BAM.BIG has to move to the end of the disc. The disc is 3.0 GB; 1.6 GB are left
+  before the size of a single-layer DVD.

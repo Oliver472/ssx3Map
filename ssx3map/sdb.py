@@ -3,10 +3,12 @@
 80-byte header (u32 location count at +8, chunk-info count at +12, sub-chunk
 count at +16, u16 world texture count at +0x2A, u16 light page count at +0x2C),
 then 88-byte location records: name[16], u32 sub-chunk count, u32 chunk count,
-u32 last chunk index (inclusive), u32 first sub-chunk, 28 x s16 not yet
-understood. Layout from GlitcherOG's SSX-Library SDBHandler and the ssxdecomp
-notes (docs/notes/subsystems/asset-formats.md). The editor never writes this
-file; it only uses it to name chunks.
+u32 last chunk index (inclusive), u32 first sub-chunk, 28 x s16 (the first 23:
+the location's record counts per kind on its own track). Then 96-byte chunk
+infos (a box tree) and 68-byte sub-chunk infos (record counts, the chunk's
+offset in bam.ssb, its size); grow.Tables reads and rewrites those. Layout from
+GlitcherOG's SSX-Library SDBHandler, the ssxdecomp notes
+(docs/notes/subsystems/asset-formats.md) and the probe report (docs/findings.md).
 """
 from __future__ import annotations
 
