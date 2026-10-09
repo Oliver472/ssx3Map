@@ -77,6 +77,8 @@ class Report:
     gates: int = 0
     cameras: int = 0
     texture: int = -1
+    chunks: dict = field(default_factory=dict)     # texture chunk -> new patches drawn with it
+    layers: dict = field(default_factory=dict)     # layer type word (+0x0C) -> new patches
     untouched: list = field(default_factory=list)
 
 
@@ -505,59 +507,77 @@ def flatten_course(world, code, design=None, log=None):
     report.jumps = list(design.jumps)
     report.drop = piste.base(s_start) - piste.base(route.length)
 
-    # Look of the old piste: its texture, texture scale, orientation, corner order, lighting.
+    # Look and streaming of the old piste. The game draws a patch only while its texture chunk
+    # (+0x155 track, +0x156 chunk) is resident, and texture chunks stream in by race progress, so
+    # every new patch copies these from the old piste patch at the same place along the course,
+    # and takes its texture and light page from that chunk.
     near = []
     for rec, p in slots:
+        if struct.unpack_from('<h', p.data, TEXTURE_CHUNK)[0] < 0:
+            continue
         c = p.point(0.5, 0.5)
-        s, l = route.locate(c[0], c[1])
-        if abs(l) < 2500:
-            near.append((rec, p))
-    near = near or slots
+        s_, l_ = route.locate(c[0], c[1])
+        if abs(l_) < 2500:
+            near.append((s_, p))
+    if not near:
+        near = [(route.locate(*p.point(0.5, 0.5)[:2])[0], p) for _, p in slots
+                if struct.unpack_from('<h', p.data, TEXTURE_CHUNK)[0] >= 0]
+    if not near:
+        raise mapedit.EditRefused(f'{code} has no drawable terrain patches to copy the look from')
+    near.sort(key=lambda t: t[0])
+    near_s = [t[0] for t in near]
     counts = {}
-    for rec, p in near:
+    for _, p in near:
         counts[p.texture] = counts.get(p.texture, 0) + 1
     tex = max(counts, key=counts.get)
-    source = next(p for rec, p in near if p.texture == tex)
     report.texture = tex
-    tex_chunk, = struct.unpack_from('<h', source.data, TEXTURE_CHUNK)
-    scales = []
-    for rec, p in near:
-        if p.texture != tex:
-            continue
+    scales = {}
+    for _, p in near:
         uv = struct.unpack_from('<8f', p.data, UVS)
         c = p.corners()
         for (a, b), (ia, ib) in ((((0, 0), (1, 0)), (0, 4)), (((0, 0), (0, 1)), (0, 2))):
             edge = math.dist(c[a], c[b])
             span = math.hypot(uv[ib] - uv[ia], uv[ib + 1] - uv[ia + 1])
             if edge > 1:
-                scales.append(span / edge)
-    scales.sort()
-    k_uv = scales[len(scales) // 2] if scales else 1 / 2000.0
+                scales.setdefault(p.texture, []).append(span / edge)
+    k_uv = {t: sorted(v)[len(v) // 2] for t, v in scales.items()}
     up = sum(1 for _, p in slots if p.normal(0.5, 0.5)[2] >= 0)
     along_u = up >= len(slots) - up            # u along the course gives an upward normal
 
-    pages = {}
-    page_ids = {struct.unpack_from('<h', p.data, LIGHT_PAGE)[0] for _, p in near}
-    for c in range(loc.first_chunk, loc.chunk_end + 1):
+    chunk_textures, pages = {}, {}
+    wanted_pages = {struct.unpack_from('<h', p.data, LIGHT_PAGE)[0] for _, p in near}
+    for c in sorted({struct.unpack_from('<h', p.data, TEXTURE_CHUNK)[0] for _, p in near}):
+        if c >= len(world.stream):
+            continue
         cdata = world.stream.current(c)
+        rids = set()
         for rec in world.stream.records(c):
-            if rec.kind == 10 and rec.rid in page_ids and rec.rid not in pages:
+            if rec.kind == 9:
+                rids.add(rec.rid)
+            elif rec.kind == 10 and rec.rid in wanted_pages and rec.rid not in pages:
                 try:
                     pages[rec.rid] = texture.decode_rgba(bytes(cdata[rec.offset:rec.offset + rec.size]),
                                                          raw_alpha=True)
                 except texture.TextureError:
                     pass
-    pool = LightPool(pages)
+        chunk_textures[c] = rids
+    pools = {page: LightPool({page: data}) for page, data in pages.items()}
     refs = []
-    for rec, p in near:
+    for _, p in near:
         page, = struct.unpack_from('<h', p.data, LIGHT_PAGE)
         u0, v0, du, dv = struct.unpack_from('<4f', p.data, LIGHT_RECT)
-        b = pool.brightness_at(pages, page, u0 + du / 2, v0 + dv / 2)
-        if b is not None:
-            refs.append(b)
+        if page in pools:
+            b = pools[page].brightness_at(pages, page, u0 + du / 2, v0 + dv / 2)
+            if b is not None:
+                refs.append(b)
     refs.sort()
     b_ref = max(0.6, refs[len(refs) * 3 // 4]) if refs else 1.0
     sun = _unit(SUN)
+
+    def reference(s_):
+        k = bisect.bisect_left(near_s, s_)
+        best = min((i for i in (k - 1, k) if 0 <= i < len(near)), key=lambda i: abs(near_s[i] - s_))
+        return near[best][1]
 
     # Rows along the course: short around jumps, the rest of the budget spread over the plain parts.
     cols = [-half_total, -design.width * 50.0, 0.0, design.width * 50.0, half_total]
@@ -612,20 +632,29 @@ def flatten_course(world, code, design=None, log=None):
                 return x, y, piste.z(s, l)
             off = rec.offset
             new = write_patch(buf, off, _fit_patch(at), _corner_order(old))
+            ref = reference((s0 + s1) / 2)
+            chunk, = struct.unpack_from('<h', ref.data, TEXTURE_CHUNK)
+            use_tex = tex if tex in chunk_textures.get(chunk, ()) else ref.texture
+            k = k_uv.get(use_tex) or k_uv.get(tex) or 1 / 2000.0
             # texture: tiled along the course (u) and across it (v), in the order (0,0) (0,1) (1,0) (1,1)
             uvs = []
             for pu, pv in ((0, 0), (0, 1), (1, 0), (1, 1)):
                 u, v = (pu, pv) if along_u else (pv, pu)
                 s, l = s0 + (s1 - s0) * u, l0 + (l1 - l0) * v
-                uvs += [s * k_uv, l * k_uv]
+                uvs += [s * k, l * k]
             struct.pack_into('<8f', buf, off + UVS, *uvs)
-            struct.pack_into('<h', buf, off + TEXTURE, tex)
-            struct.pack_into('<h', buf, off + TEXTURE_CHUNK, tex_chunk)
-            # surface and flags (+0x08, +0x0A) as on the old piste; collidable
-            buf[off + 0x08:off + 0x0C] = source.data[0x08:0x0C]
+            # surface, flags, layer types (+0x08..+0x0F), streaming track and chunk (+0x155, +0x156)
+            # and the extra layer's texture (+0x1A4) as on the old piste here; collidable
+            buf[off + 0x08:off + 0x10] = ref.data[0x08:0x10]
+            buf[off + 0x155:off + 0x158] = ref.data[0x155:0x158]
+            buf[off + 0x1A4:off + 0x1A6] = ref.data[0x1A4:0x1A6]
+            struct.pack_into('<h', buf, off + TEXTURE, use_tex)
             flags, = struct.unpack_from('<h', buf, off + FLAGS)
             struct.pack_into('<h', buf, off + FLAGS, flags | 1)
-            # light: one texel as bright as this patch's slope towards the sun asks for
+            report.chunks[chunk] = report.chunks.get(chunk, 0) + 1
+            layer, = struct.unpack_from('<H', buf, off + 0x0C)
+            report.layers[layer] = report.layers.get(layer, 0) + 1
+            # light: a texel of this place's light page as bright as the slope towards the sun asks for
             sm, lm = (s0 + s1) / 2, (l0 + l1) / 2
             n = _unit(new.normal(0.5, 0.5))
             if n[2] < 0:
@@ -640,11 +669,14 @@ def flatten_course(world, code, design=None, log=None):
             if n0[2] < 0:
                 n0 = tuple(-x for x in n0)
             ratio = sum(a * b for a, b in zip(n, sun)) / max(0.05, sum(a * b for a, b in zip(n0, sun)))
-            texel = pool.nearest(b_ref * max(0.5, min(1.3, ratio)))
+            page, = struct.unpack_from('<h', ref.data, LIGHT_PAGE)
+            texel = pools[page].nearest(b_ref * max(0.5, min(1.3, ratio))) if page in pools else None
             if texel is not None:
                 _, page, u, v = texel
                 struct.pack_into('<4f', buf, off + LIGHT_RECT, u, v, 1e-5, 1e-5)
-                struct.pack_into('<h', buf, off + LIGHT_PAGE, page)
+            else:
+                buf[off + LIGHT_RECT:off + LIGHT_RECT + 16] = ref.data[LIGHT_RECT:LIGHT_RECT + 16]
+            struct.pack_into('<h', buf, off + LIGHT_PAGE, page)
     report.used = used
     # Leftover slots: 10 cm patches 1 km under the start, not collidable.
     far = (*route.point(s_start, 0.0), z_start + mapedit.SINK)

@@ -115,6 +115,38 @@ class FlattenTest(unittest.TestCase):
         self.assertEqual(r.points, 2)
         self.assertGreater(r.gates, 0)
 
+    def test_patches_stream_with_the_old_piste_there(self):
+        # The game draws a patch only while its texture chunk (+0x156) is loaded, and texture
+        # chunks follow race progress: the far half of this course uses chunk 3 and texture 3.
+        w = World(self.path)
+        buf = w.stream.chunk(1)
+        for rec in w.stream.records(1):
+            if rec.kind == 1:
+                p = terrain.Patch(buf[rec.offset:rec.offset + rec.size])
+                if p.point(0.5, 0.5)[1] > 3000:
+                    struct.pack_into('<h', buf, rec.offset + 0x156, 3)
+                    struct.pack_into('<h', buf, rec.offset + 0x1A0, 3)
+        r = rebuild.flatten_course(w, 'AAA', rebuild.Design(**DESIGN))
+        data = w.stream.current(1)
+        textures = {c: {x.rid for x in w.stream.records(c) if x.kind == 9} for c in range(len(w.stream))}
+        seen = set()
+        for rec in w.stream.records(1):
+            if rec.kind != 1:
+                continue
+            p = terrain.Patch(data[rec.offset:rec.offset + rec.size])
+            if not p.flags & 1:
+                continue
+            chunk, = struct.unpack_from('<h', p.data, 0x156)
+            self.assertIn(p.texture, textures[chunk])
+            far = p.point(0.5, 0.5)[1] > 3300
+            near = p.point(0.5, 0.5)[1] < 2700
+            if far:
+                self.assertEqual((chunk, p.texture), (3, 3))
+            if near:
+                self.assertEqual((chunk, p.texture), (0, 7))
+            seen.add(chunk)
+        self.assertEqual(seen, {0, 3})
+
     def test_fits_and_saves(self):
         w, before, r = self.build()
         for c in w.stream.changed_chunks():

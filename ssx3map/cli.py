@@ -350,6 +350,8 @@ def cmd_flat(args):
           f'dĺžka plátov {r.fine / 100:.1f}..{r.coarse / 100:.1f} m')
     print(f'  trasa vyhladená (o najviac {r.shift / 100:.0f} m od pôvodnej), pokles {r.drop / 100:.0f} m, '
           f'textúra {r.texture}')
+    print('  textúrové chunky (počet plátov): ' + ', '.join(f'{c}: {n}' for c, n in sorted(r.chunks.items()))
+          + '; typy vrstiev: ' + ', '.join(f'0x{k:X}: {n}' for k, n in sorted(r.layers.items())))
     print(f'  zmazané: {r.sunk} objektov, {r.rails} zábradlí, {r.lights} svetiel, {r.particles} častíc, '
           f'{r.curtains} zásten; ponechané pomocné objekty {r.helpers}')
     print(f'  na novom svahu: AI/pretekové trasy {r.paths}, štart/reset body {r.points}, '

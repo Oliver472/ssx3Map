@@ -505,7 +505,7 @@ def build_course_world():
     connector = terrain_grid(0.0, 10 * PATCH_M, 6, 4, 1) + record(15, 1, 0, painter_record(
         [(0.5, 2.0, 3000.0, 8000.0, 0.6, 0.7, 0.9)]))
     chunks = [record(9, 255, 7, texture_8bit(32, 32, 1)) + record(10, 255, 0, light_page()), main, connector,
-              record(15, 2, 0, painter_record([(1.0, 0.0, 1.0, 2.0, 0, 0, 0)]))]
+              record(9, 255, 3, texture_rgba(16, 16)) + record(15, 2, 0, painter_record([(1.0, 0.0, 1.0, 2.0, 0, 0, 0)]))]
     ssb = build_ssb_slots(chunks)
     sdb = build_sdb([('AAA', 1), ('A_AAA', 2), ('ASKY', 3)])
     big = build_big([('bam.sdb', sdb), ('bam.ssb', ssb), ('bam.phm', bytes(16)), ('bam.psm', bytes(16))])
