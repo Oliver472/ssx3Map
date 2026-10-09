@@ -165,6 +165,16 @@ three.js sa sťahuje z CDN. Herné dáta ostávajú u teba, editor beží iba lo
   Pridáva aj oblohu oblasti a hmlu z dát trate. Textúry a modely sa dekódujú
   z tvojho ISO, takže prvé načítanie trate trvá pár sekúnd. Bez herného
   vzhľadu sa terén zafarbí podľa výšky a objekty sú krabice.
+- **Zvýrazniť zmeny:** upravené pláty terénu sú oranžové a nad panelom
+  vidno ich počet. Porovnáva sa s ISO, ktoré si otvoril. S
+  `--compare` porovnáš upravené ISO s pôvodnou hrou:
+  `python3 -m ssx3map editor SSX3_nova_trat.iso --compare "SSX 3 (USA).iso"`.
+- **Reliéf:** hra má tiene zapečené v textúrach, takže nový skok by v hernom
+  vzhľade vyzeral plochý. Reliéf pridá tieňovanie podľa tvaru terénu.
+- **Recept:** vyber recept (napr. Snow Jam – Oliverova trať) a klikni
+  **Použiť recept**. Celá trať sa postaví naraz s rovnakou kontrolou miesta
+  ako pri `build`. Každý krok dostane nad traťou oranžový popis a v paneli
+  tlačidlo, ktoré ťa k nemu prenesie. Späť (Ctrl+Z) vráti celý recept.
 - **Pozerať:** ľavé tlačidlo otáča, pravé posúva, koliesko približuje.
   Posuvník „Kamera na trati“ ťa prenesie na zvolený meter trate. Myšou nad
   terénom vidíš súradnice a vzdialenosť od štartu.

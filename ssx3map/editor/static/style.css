@@ -54,3 +54,7 @@ button.active { background: #7a5d10; border-color: #c9a227; }
 .spinner { width: 22px; height: 22px; border: 3px solid #fff3; border-top-color: #fff; border-radius: 50%;
   animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+.label3d.recipe { color: #ffb74d; font-size: 13px; }
+.marks { font-size: 12px; max-height: 160px; overflow-y: auto; }
+.marks button { display: block; width: 100%; text-align: left; margin: 2px 0; padding: 3px 6px; font-size: 12px; }
+.marks .changed { color: #ffb74d; margin: 4px 0; }

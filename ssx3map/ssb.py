@@ -358,8 +358,10 @@ def parallel_map(fn, items, workers=None):
     if workers <= 1 or len(items) < 2:
         return [fn(x) for x in items]
     try:
+        import multiprocessing
         from concurrent.futures import ProcessPoolExecutor
-        with ProcessPoolExecutor(max_workers=workers) as pool:
+        # spawn (the macOS default) everywhere: forking the threaded editor server is unsafe
+        with ProcessPoolExecutor(max_workers=workers, mp_context=multiprocessing.get_context('spawn')) as pool:
             return list(pool.map(fn, items))
     except (OSError, ImportError, RuntimeError):        # no process support here: do it serially
         return [fn(x) for x in items]

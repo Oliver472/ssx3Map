@@ -35,10 +35,25 @@
       <label class="check"><input type="checkbox" id="showHelpers"> pomocné objekty</label>
       <label class="check"><input type="checkbox" id="showRails" checked> zábradlia</label>
     </div>
+    <div class="row">
+      <label class="check"><input type="checkbox" id="showChanges" checked> zvýrazniť zmeny</label>
+      <label class="check"><input type="checkbox" id="relief" checked> reliéf</label>
+    </div>
     <label>Kamera na trati: <span id="alongLabel">0 m</span>
       <input type="range" id="along" min="0" max="1000" step="10" value="0">
     </label>
     <button id="toStart" class="small">Na štart</button>
+  </section>
+
+  <section>
+    <label>Recept (celá nová trať naraz)
+      <select id="recipe"></select>
+    </label>
+    <div class="row">
+      <button id="applyRecipe" class="small">Použiť recept</button>
+      <label class="check"><input type="checkbox" id="recipeNoWarp"> bez ohybov</label>
+    </div>
+    <div id="marks" class="marks"></div>
   </section>
 
   <section>

@@ -20,7 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from .. import aip as aipmod
-from .. import mapedit, models, painter, ssb, terrain, texture, warp
+from .. import mapedit, models, painter, recipe, ssb, terrain, texture, warp
 
 STATIC = os.path.join(os.path.dirname(__file__), 'static')
 UNDO_LIMIT = 25
@@ -41,10 +41,12 @@ def _key(chunk, rec):
 
 
 class Session:
-    def __init__(self, world):
+    def __init__(self, world, reference=None):
         self.world = world
+        self.reference = reference  # another World (the untouched game) to show changes against
         self.lock = threading.RLock()
         self.undo = []              # [(label, snapshot)]
+        self.marks = []             # [(undo depth, code, mark dict)] labels of applied recipe steps
         self.textures = {}          # rid -> record bytes
         self.lightpages = {}        # rid -> record bytes
         self.pngs = {}              # (kind, rid) -> png bytes (or None if undecodable)
@@ -65,25 +67,37 @@ class Session:
                     undo=[label for label, _ in self.undo], edits=self.edits,
                     output=base + ('_upravene.iso' if w.is_iso else '_upravene.BIG'))
 
+    def _base(self, chunk):
+        """The chunk as it is in the game we compare with (the reference disc, else this one)."""
+        ref = self.reference
+        if ref is not None and chunk < len(ref.stream) \
+                and ref.stream.chunks[chunk].decoded_size == self.world.stream.chunks[chunk].decoded_size:
+            return ref.stream.current(chunk)
+        return self.world.stream.chunk_original(chunk)
+
     def course(self, code):
         w = self.world
         with self.lock:
             locs = mapedit.course_locations(w, code)
             patches = []
+            changed = 0
             for c, rec, p in mapedit.patches(w, locs):
                 coeff = [v for j in range(4) for i in range(4) for v in p.c[j][i]]
+                ch = self._base(c)[rec.offset:rec.offset + rec.size] != p.data
+                changed += ch
                 patches.append(dict(k=_key(c, rec), c=_r(coeff, 3), t=p.texture,
                                     uv=_r(struct.unpack_from('<8f', p.data, 0x20), 4), f=p.flags,
                                     l=_r(struct.unpack_from('<4f', p.data, 0x10), 6),
-                                    lp=struct.unpack_from('<h', p.data, 0x1A2)[0]))
+                                    lp=struct.unpack_from('<h', p.data, 0x1A2)[0], ch=int(ch)))
             objects = []
             for c, rec, inst, name in mapedit.find_objects(w, code):
                 lo, hi = inst.bbox
                 matrix, model, scale = models.instance_placement(w.record_bytes(c, rec))
                 model_name = w.name_of(2, *model) or ''
+                ch = self._base(c)[rec.offset:rec.offset + 0x90] != w.stream.current(c)[rec.offset:rec.offset + 0x90]
                 objects.append(dict(k=_key(c, rec), n=name, lo=_r(lo), hi=_r(hi),
                                     p=mapedit.is_protected(name) or 'trig' in model_name.lower(),
-                                    m=_r(matrix, 4), s=round(scale, 5), mod=f'{model[0]}:{model[1]}'))
+                                    m=_r(matrix, 4), s=round(scale, 5), mod=f'{model[0]}:{model[1]}', ch=int(ch)))
             course = mapedit.course_aip(w, code)
             line = aipmod.course_line(course) if course else None
             regions = [dict(kind=r.kind, slot=r.slot, p=_r(r.position), d=_r(r.direction, 4))
@@ -114,8 +128,10 @@ class Session:
                         fog = {k: round(v, 4) for k, v in entries[0][1].items()}
             sky = locs[0].name[0] + 'SKY'
             sky = sky if any(l.name == sky for l in w.sdb.locations) else None
+            marks = [m for _, mcode, m in self.marks if mcode == code]
             return dict(code=code, name=NAMES.get(code, code), locations=[l.name for l in locs], fog=fog, sky=sky,
-                        patches=patches, objects=objects, regions=regions, rails=rails,
+                        patches=patches, objects=objects, regions=regions, rails=rails, changed=changed,
+                        marks=marks, compare=bool(self.reference),
                         line=(dict(pts=[_r(p) for p in line.points], offset=round(line.start_offset, 2),
                                    length=round(line.length, 2)) if line else None),
                         undo=[label for label, _ in self.undo], edits=self.edits)
@@ -272,6 +288,54 @@ class Session:
                                  f'odchýlka {report.shape_error / 100:.2f} m, objekty {report.objects}, '
                                  f'zábradlia {report.rails}, štart/reset body {report.points}'))
 
+    def recipes(self):
+        out = []
+        for name in recipe.builtin_names():
+            rc = recipe.load(name)
+            out.append(dict(name=name, title=rc.get('name', name), course=rc['course'], note=rc.get('note', ''),
+                            steps=len(rc['steps'])))
+        return out
+
+    def apply_recipe(self, req):
+        """Apply a whole recipe as one edit; steps that do not fit the game data are left out."""
+        w = self.world
+        with self.lock:
+            rc = recipe.load(req['name'])
+            code = rc['course']
+            skip = tuple(req.get('skip') or ())
+            snap = w.stream.snapshot(mapedit.course_chunks(w, code))
+            lines = []
+            results = recipe.run(w, rc, skip=skip, log=lines.append)
+
+            def fresh():
+                w.stream.restore(snap)
+                return w
+            try:
+                _, results, left_out = recipe.fit(w, fresh, rc, results, skip=skip, log=lines.append)
+            except recipe.RecipeError:
+                w.stream.restore(snap)
+                raise mapedit.EditRefused('none of the steps fits the game data')
+            done = [r for r in results if r.ok]
+            if not done:
+                w.stream.restore(snap)
+                raise mapedit.EditRefused('no step of the recipe could be applied here:\n' + '\n'.join(lines))
+            label = f'recept {rc.get("name", req["name"])}'
+            self._push(label, snap)
+            depth = len(self.undo)
+            for r in done:
+                if r.x is not None:
+                    self.marks.append((depth, code, dict(x=round(r.x, 1), y=round(r.y, 1),
+                                                         z=round(r.z, 1) if r.z is not None else None,
+                                                         t=f'{r.number}. {r.tag}')))
+            skipped = [r for r in results if not r.ok]
+            msg = f'{label}: {len(done)} krokov použitých'
+            if skipped:
+                msg += f', {len(skipped)} sa na teréne nedalo urobiť'
+            if left_out:
+                msg += f', vynechané pre miesto v dátach: {", ".join(map(str, sorted(left_out)))}'
+            return dict(message=msg, code=code, steps=[dict(n=r.number, op=r.op, ok=r.ok, tag=r.tag, msg=r.message)
+                                                       for r in results])
+
     def warp(self, req):
         """Grab the ground at (x, y) and carry it to (tx, ty) (cm), lifted by `lift` and turned by `turn`."""
         w = self.world
@@ -350,6 +414,7 @@ class Session:
                 raise mapedit.EditRefused('nothing to undo')
             label, snap = self.undo.pop()
             self.world.stream.restore(snap)
+            self.marks = [m for m in self.marks if m[0] <= len(self.undo)]
             self.edits += 1
             return dict(message=f'späť: {label}')
 
@@ -402,6 +467,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._static(url.path[len('/static/'):])
         if url.path == '/api/info':
             return self._guard(s.info)
+        if url.path == '/api/recipes':
+            return self._guard(s.recipes)
         if url.path == '/api/course':
             return self._guard(lambda: s.course(q['code'][0]))
         if url.path == '/api/models':
@@ -426,7 +493,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(400, dict(error='bad JSON'))
         s = self.session
         routes = {'/api/terrain': lambda: s.terrain(req), '/api/stroke': lambda: s.stroke(req),
-                  '/api/warp': lambda: s.warp(req),
+                  '/api/warp': lambda: s.warp(req), '/api/recipe': lambda: s.apply_recipe(req),
                   '/api/objects': lambda: s.objects(req),
                   '/api/undo': s.undo_last, '/api/save': lambda: s.save(req['output'])}
         if url.path not in routes:
@@ -442,8 +509,8 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, body, mimetypes.guess_type(path)[0] or 'application/octet-stream')
 
 
-def serve(world, port=8765, open_browser=True):
-    Handler.session = Session(world)
+def serve(world, port=8765, open_browser=True, reference=None):
+    Handler.session = Session(world, reference)
     httpd = ThreadingHTTPServer(('127.0.0.1', port), Handler)
     url = f'http://127.0.0.1:{httpd.server_address[1]}/'
     print(f'editor beží na {url}  (ukončíš Ctrl+C)', flush=True)

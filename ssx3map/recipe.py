@@ -93,6 +93,29 @@ class StepResult:
     where: str
     ok: bool
     message: str
+    x: float = None         # cm, where the step was placed
+    y: float = None
+    z: float = None
+    tag: str = ''           # a short label for maps and the editor
+
+
+def _tag(step):
+    op, h = step['op'], step.get('height', 0.0)
+    if op == 'warp':
+        parts = []
+        if step.get('right'):
+            parts.append(f'{abs(step["right"]):.0f} m {"doprava" if step["right"] > 0 else "doľava"}')
+        if step.get('ahead'):
+            parts.append(f'{step["ahead"]:+.0f} m dopredu')
+        if step.get('lift'):
+            parts.append(f'{step["lift"]:+.0f} m hore')
+        if step.get('turn'):
+            parts.append(f'{step["turn"]:+.0f}°')
+        return 'ohyb ' + ', '.join(parts)
+    names = {'kicker': 'skok', 'bump': 'kopec' if h >= 0 else 'jama', 'plateau': 'stôl', 'flatten': 'zarovnanie'}
+    if op in names:
+        return f'{names[op]} {h:+.1f} m'
+    return 'objekty ' + ('preč' if step.get('remove') else 'posun')
 
 
 def _place(world, code, step):
@@ -156,6 +179,7 @@ def run(world, recipe, skip=(), leave_out=(), log=None):
         if op in skip or n in leave_out:
             continue
         where = ''
+        pl = None
         try:
             pl = _place(world, code, step)
             where = f'{pl.frame.x / 100:.0f}, {pl.frame.y / 100:.0f}'
@@ -168,6 +192,16 @@ def run(world, recipe, skip=(), leave_out=(), log=None):
             res = StepResult(n, op, where, True, msg)
         except (mapedit.EditRefused, ValueError) as e:
             res = StepResult(n, op, where, False, str(e))
+        res.tag = _tag(step)
+        if pl is not None:
+            f = pl.frame
+            res.x, res.y, res.z = f.x, f.y, pl.z
+            if op == 'warp' and res.ok:             # the course is now where the ground went
+                right, ahead = step.get('right', 0.0) * 100, step.get('ahead', 0.0) * 100
+                res.x += right * f.rx + ahead * f.fx
+                res.y += right * f.ry + ahead * f.fy
+                if res.z is not None:
+                    res.z += step.get('lift', 0.0) * 100
         results.append(res)
         if log:
             place = f'{step["along"]:.0f} m' if 'along' in step else where

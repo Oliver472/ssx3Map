@@ -363,7 +363,8 @@ def cmd_objects(args):
 def cmd_editor(args):
     from .editor.server import serve
     w = _open(args.input)
-    serve(w, port=args.port, open_browser=not args.no_browser)
+    ref = _open(args.compare) if args.compare else None
+    serve(w, port=args.port, open_browser=not args.no_browser, reference=ref)
 
 
 def main(argv=None):
@@ -472,6 +473,7 @@ def main(argv=None):
     sp = add('editor', cmd_editor, 'open the map editor in the browser (three.js)')
     sp.add_argument('--port', type=int, default=8765)
     sp.add_argument('--no-browser', action='store_true', help='do not open a browser window')
+    sp.add_argument('--compare', metavar='ORIGINAL', help='the untouched game: show what differs from it')
 
     args = p.parse_args(argv)
     args.fn(args)

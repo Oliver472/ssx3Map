@@ -147,6 +147,44 @@ class EditorApiTest(unittest.TestCase):
         self.assertEqual(back['regions'], course['regions'])
 
 
+    def test_recipe_marks_and_changes(self):
+        status, recipes = self.call('/api/recipes')
+        self.assertEqual(status, 200)
+        self.assertIn('snowjam_oliver', [r['name'] for r in recipes])
+        path = os.path.join(self.tmp.name, 'mini.json')
+        with open(path, 'w') as f:
+            json.dump({'name': 'mini', 'course': 'AAA', 'steps': [
+                {'op': 'warp', 'along': 24, 'right': 3, 'radius': 5, 'edge': 15},
+                {'op': 'bump', 'along': 10, 'height': 1.5}]}, f)
+        _, before = self.call('/api/course?code=AAA')
+        status, res = self.call('/api/recipe', dict(name=path))
+        self.assertEqual(status, 200, res)
+        self.assertEqual(res['code'], 'AAA')
+        self.assertEqual([s['ok'] for s in res['steps']], [True, True])
+        _, after = self.call('/api/course?code=AAA')
+        self.assertEqual([m['t'] for m in after['marks']], ['1. ohyb 3 m doprava', '2. kopec +1.5 m'])
+        self.assertGreater(after['changed'], before['changed'])
+        self.assertEqual(after['changed'], sum(p['ch'] for p in after['patches']))
+        self.assertTrue(any(o['ch'] for o in after['objects']))
+        status, res = self.call('/api/undo', {})
+        _, back = self.call('/api/course?code=AAA')
+        self.assertEqual(back['marks'], [])
+        self.assertEqual(back['changed'], before['changed'])
+
+    def test_compare_with_the_original_game(self):
+        from ssx3map import warp
+        w = World(self.iso)
+        warp.warp_edit(w, 'AAA', warp.Grab((1500.0, 2500.0), (300.0, 0.0, 0.0), 500.0, 1500.0))
+        out = os.path.join(self.tmp.name, 'warped.iso')
+        w.save(out)
+        plain = server.Session(World(out)).course('AAA')
+        compared = server.Session(World(out), reference=World(self.iso)).course('AAA')
+        self.assertEqual(plain['changed'], 0)               # the edited disc against itself
+        self.assertFalse(plain['compare'])
+        self.assertTrue(compared['compare'])
+        self.assertGreater(compared['changed'], 20)
+
+
 def Patch_c(flat):
     return [[tuple(flat[(j * 4 + i) * 3:(j * 4 + i) * 3 + 3]) for i in range(4)] for j in range(4)]
 

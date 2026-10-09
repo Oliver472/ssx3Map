@@ -104,6 +104,24 @@ check(regionsAfter !== aside.regions, 'reset point moved with the ground');
 await page.waitForTimeout(500);
 await page.screenshot({ path: path.join(out, 'editor-2c-warp.png') });
 
+// A recipe (RECIPE=path to a recipe for this course): its steps get labels and the changes show.
+if (process.env.RECIPE) {
+  const options = await page.$$eval('#recipe option', (o) => o.length);
+  check(options > 0, `recipes listed (${options})`);
+  const res = await page.evaluate(async (name) => {
+    const r = await window.ssxEditor.api('/api/recipe', { name });
+    await window.ssxEditor.loadCourse(r.code, true);
+    return r.message;
+  }, process.env.RECIPE);
+  check(/recept/.test(res), `recipe applied: ${res}`);
+  const marks = await page.$$eval('#marks button', (b) => b.map((x) => x.textContent));
+  check(marks.length > 0, `recipe steps listed: ${marks.join(' | ')}`);
+  check(/zmenené pláty: \d+/.test(await page.$eval('#marks', (e) => e.innerText)), 'changed patches counted');
+  await page.click('#marks button');
+  await page.waitForTimeout(800);
+  await page.screenshot({ path: path.join(out, 'editor-2d-recipe.png') });
+}
+
 // Objects: select the first visible object by projecting it to the screen, then raise it.
 await page.click('button[data-tool=objects]');
 const target = await page.evaluate(() => {

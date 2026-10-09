@@ -221,27 +221,32 @@ function disposeGroup(group) {
 
 const colouredMaterial = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
 const lowColour = new THREE.Color(0x5b7d9c), highColour = new THREE.Color(0xf4f8fb);
+const changedColour = new THREE.Color(0xff9a3c);
 const gameLook = () => $('gameLook').checked;
 
 // ---- game look: the PS2 combines raw texel bytes, so these shaders do too (no colour management).
 const fog = { colour: new THREE.Vector3(0.70, 0.82, 1.0), near: 30, far: 100, max: 0 };
 const VERT_TERRAIN = `precision highp float;
 uniform mat4 modelViewMatrix; uniform mat4 projectionMatrix;
-attribute vec3 position; attribute vec2 uv; attribute vec2 luv;
-varying vec2 vUv; varying vec2 vLuv; varying float vDepth;
-void main() { vUv = uv; vLuv = luv; vec4 mv = modelViewMatrix * vec4(position, 1.0); vDepth = -mv.z;
-  gl_Position = projectionMatrix * mv; }`;
+attribute vec3 position; attribute vec2 uv; attribute vec2 luv; attribute vec3 normal; attribute float hl;
+varying vec2 vUv; varying vec2 vLuv; varying float vDepth; varying vec3 vN; varying float vHl;
+void main() { vUv = uv; vLuv = luv; vN = normal; vHl = hl; vec4 mv = modelViewMatrix * vec4(position, 1.0);
+  vDepth = -mv.z; gl_Position = projectionMatrix * mv; }`;
 const FOG_GLSL = `uniform vec3 fogColour; uniform float fogNear; uniform float fogFar; uniform float fogMax;
 vec3 applyFog(vec3 c, float d) { return mix(c, fogColour, fogMax * clamp((d - fogNear) / max(1.0, fogFar - fogNear), 0.0, 1.0)); }`;
 // Terrain (PS2 0x81 blend of the light page over the base texture): C = (T - L.rgb) * L.a / 128.
+// relief: the game's lighting is baked, so a new jump would look flat; shade by the surface normal too.
 const FRAG_TERRAIN = `precision highp float;
 uniform sampler2D map; uniform sampler2D lmap; uniform float hasMap; uniform float hasLight;
+uniform float relief; uniform float showHl;
 ${FOG_GLSL}
-varying vec2 vUv; varying vec2 vLuv; varying float vDepth;
+varying vec2 vUv; varying vec2 vLuv; varying float vDepth; varying vec3 vN; varying float vHl;
 void main() {
   vec3 t = hasMap > 0.5 ? texture2D(map, vUv).rgb : vec3(0.86, 0.89, 0.93);
   vec3 c = t;
   if (hasLight > 0.5) { vec4 l = texture2D(lmap, vLuv); c = clamp((t - l.rgb) * l.a * (255.0 / 128.0), 0.0, 1.0); }
+  if (relief > 0.5) c *= 0.45 + 0.75 * max(dot(normalize(vN), normalize(vec3(-0.5, 0.75, 0.45))), 0.0);
+  if (showHl > 0.5 && vHl > 0.5) c = mix(c, vec3(1.0, 0.45, 0.0), 0.5);
   gl_FragColor = vec4(applyFog(c, vDepth), 1.0);
 }`;
 const VERT_MODEL = `precision highp float;
@@ -306,7 +311,8 @@ function cachedTexture(kind, id, code, clamp, apply) {
 function terrainMaterial(tex, page) {
   const m = new THREE.RawShaderMaterial({ vertexShader: VERT_TERRAIN, fragmentShader: FRAG_TERRAIN,
     side: THREE.DoubleSide, uniforms: { map: { value: null }, lmap: { value: null }, hasMap: { value: 0 },
-      hasLight: { value: 0 }, ...fogUniforms() } });
+      hasLight: { value: 0 }, relief: { value: $('relief').checked ? 1 : 0 },
+      showHl: { value: $('showChanges').checked ? 1 : 0 }, ...fogUniforms() } });
   gameMaterials.add(m);
   if (tex >= 0) cachedTexture('texture', tex, state.code, false, (t) => {
     if (t) { m.uniforms.map.value = t; m.uniforms.hasMap.value = 1; } });
@@ -415,7 +421,7 @@ function buildTerrain() {
   const col = new THREE.Color();
   for (const p of state.course.patches) {
     const key = `${p.t}|${p.lp}`;
-    if (!groups.has(key)) groups.set(key, { tex: p.t, page: p.lp, pos: [], nrm: [], uv: [], luv: [], col: [], idx: [] });
+    if (!groups.has(key)) groups.set(key, { tex: p.t, page: p.lp, pos: [], nrm: [], uv: [], luv: [], col: [], hl: [], idx: [] });
     const g = groups.get(key);
     const lr = p.l;     // lighting rectangle in the light page: u0, v0, du, dv
     const base = g.pos.length / 3;
@@ -434,7 +440,9 @@ function buildTerrain() {
         uvc[1] * (1 - u) * (1 - v) + uvc[5] * u * (1 - v) + uvc[3] * (1 - u) * v + uvc[7] * u * v);
       g.luv.push(lr[0] + u * lr[2], lr[1] + v * lr[3]);
       col.lerpColors(lowColour, highColour, Math.min(1, Math.max(0, (q[2] - zmin) / (zmax - zmin || 1))));
+      if (p.ch && $('showChanges').checked) col.lerp(changedColour, 0.5);
       g.col.push(col.r, col.g, col.b);
+      g.hl.push(p.ch ? 1 : 0);
     }
     for (let b = 0; b < SEG; b++) for (let a = 0; a < SEG; a++) {
       const i0 = base + b * (SEG + 1) + a, i1 = i0 + 1, i2 = i0 + SEG + 1, i3 = i2 + 1;
@@ -448,6 +456,7 @@ function buildTerrain() {
     geo.setAttribute('uv', new THREE.Float32BufferAttribute(g.uv, 2));
     geo.setAttribute('luv', new THREE.Float32BufferAttribute(g.luv, 2));
     geo.setAttribute('color', new THREE.Float32BufferAttribute(g.col, 3));
+    geo.setAttribute('hl', new THREE.Float32BufferAttribute(g.hl, 1));
     geo.setIndex(g.idx);
     geo.computeBoundingSphere();
     const mesh = new THREE.Mesh(geo, gameLook() ? terrainMaterial(g.tex, g.page) : colouredMaterial);
@@ -528,6 +537,15 @@ function buildOverlay() {
     if (r.kind === 1) state.overlay.add(label(`S${r.slot}`, 'session', pos));
     else if (r.slot === 0) state.overlay.add(label('ŠTART', 'start', pos));
   }
+  for (const m of c.marks || []) {
+    const z = m.z ?? surfaceZ(m.x, m.y) ?? state.zmin;
+    const foot = toScene([m.x, m.y, z]), top = toScene([m.x, m.y, z + 2500]);
+    state.overlay.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([foot, top]),
+      new THREE.LineBasicMaterial({ color: 0xffa726 })));
+    const tag = label(m.t, 'recipe', top);
+    tag.userData.far = true;
+    state.overlay.add(tag);
+  }
   if ($('showRails').checked) {
     const mat = new THREE.LineBasicMaterial({ color: 0xe040fb });
     for (const rail of c.rails) {
@@ -574,6 +592,7 @@ async function loadCourse(code, keepView) {
     $('along').max = Math.max(10, Math.round(len));
     $('courseInfo').textContent = `${course.name}: ${course.locations.join(', ')} · ${course.patches.length} plátov, ` +
       `${course.objects.length} objektov` + (len ? ` · trať ${Math.round(len)} m` : '');
+    showMarks(course);
     updateUndo(course.undo);
     if (!keepView || !state.framed) { flyAlong(0); state.framed = true; }
     if (state.sel) reselect();
@@ -587,6 +606,46 @@ async function loadCourse(code, keepView) {
 function updateUndo(list) {
   $('undo').disabled = !list.length;
   $('undoInfo').textContent = list.length ? `posledné: ${list[list.length - 1]}` : 'žiadne úpravy';
+}
+
+function flyTo(x, y, z) {
+  // Look at (x, y) from 90 m back along the course and 45 m up.
+  const h = state.line ? state.line.nearest(x, y).h : [1, 0];
+  const target = toScene([x, y, z ?? surfaceZ(x, y) ?? state.zmin]);
+  controls.target.copy(target);
+  camera.position.copy(target).addScaledVector(new THREE.Vector3(h[0], 0, -h[1]), -90).add(new THREE.Vector3(0, 45, 0));
+  controls.update();
+}
+
+function showMarks(course) {
+  const box = $('marks');
+  box.innerHTML = '';
+  if (course.changed) {
+    box.append(Object.assign(document.createElement('div'), { className: 'changed',
+      textContent: `zmenené pláty: ${course.changed}` + (course.compare ? ' (oproti pôvodnej hre)' : ' (oproti otvorenému ISO)') }));
+  }
+  for (const m of course.marks || []) {
+    const b = Object.assign(document.createElement('button'), { className: 'small', textContent: m.t });
+    b.addEventListener('click', () => flyTo(m.x, m.y, m.z));
+    box.append(b);
+  }
+}
+
+async function applyRecipe() {
+  const name = $('recipe').value;
+  if (!name) return;
+  busy(true, 'staviam trať podľa receptu… (s kontrolou miesta v dátach to trvá pár minút)');
+  try {
+    const res = await api('/api/recipe', { name, skip: $('recipeNoWarp').checked ? ['warp'] : [] });
+    for (const st of res.steps.slice().reverse()) log(`${st.n}. ${st.tag}: ${st.ok ? 'ok' : 'nedá sa: ' + st.msg}`, st.ok ? '' : 'err');
+    log(res.message, 'ok');
+    if (res.code !== state.code) { $('course').value = res.code; state.framed = false; }
+    await loadCourse(res.code, res.code === state.code);
+  } catch (e) {
+    log(e.message, 'err');
+  } finally {
+    busy(false);
+  }
 }
 
 function flyAlong(metres) {
@@ -1058,6 +1117,9 @@ $('showBoxes').addEventListener('change', buildObjects);
 $('showObjects').addEventListener('change', () => { select(null); buildObjects(); buildModels(); });
 $('showHelpers').addEventListener('change', () => { select(null); buildObjects(); buildModels(); });
 $('showRails').addEventListener('change', buildOverlay);
+$('showChanges').addEventListener('change', buildTerrain);
+$('relief').addEventListener('change', buildTerrain);
+$('applyRecipe').addEventListener('click', applyRecipe);
 $('along').addEventListener('input', () => flyAlong(parseFloat($('along').value)));
 $('toStart').addEventListener('click', () => flyAlong(0));
 $('course').addEventListener('change', () => { select(null); state.framed = false; loadCourse($('course').value, false); });
@@ -1099,7 +1161,7 @@ async function save() {
 const LABEL_RANGE = 600;     // metres; farther labels only clutter the view
 function cullLabels() {
   for (const o of state.overlay.children) {
-    if (o.isCSS2DObject) o.visible = o.position.distanceTo(camera.position) < LABEL_RANGE;
+    if (o.isCSS2DObject) o.visible = o.position.distanceTo(camera.position) < (o.userData.far ? 3 : 1) * LABEL_RANGE;
   }
 }
 
@@ -1125,6 +1187,15 @@ async function start() {
       opt.textContent = `${c.name} (${c.code})`;
       $('course').append(opt);
     }
+    try {
+      for (const r of await api('/api/recipes')) {
+        const opt = document.createElement('option');
+        opt.value = r.name;
+        opt.textContent = `${r.title} (${r.steps} krokov)`;
+        opt.title = r.note;
+        $('recipe').append(opt);
+      }
+    } catch (e) { log(e.message, 'err'); }
     const first = info.courses.find((c) => c.code === 'ARA1') || info.courses[0];
     if (!first) { log('v dátach nie je žiadna známa trať', 'err'); return; }
     $('course').value = first.code;
@@ -1136,7 +1207,7 @@ async function start() {
 }
 
 window.ssxEditor = {                                          // for debugging and tests
-  state, api, loadCourse, flyAlong,
+  state, api, loadCourse, flyAlong, flyTo,
   project: (x, y, z) => new THREE.Vector3(x, y, z).project(camera),
 };
 start();
