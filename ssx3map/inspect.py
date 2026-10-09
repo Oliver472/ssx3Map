@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import collections
 import hashlib
+import math
 import statistics
 import struct
 import time
 import traceback
 
-from . import painter, refpack, ssb, texture
+from . import mapedit, painter, refpack, ssb, terrain, texture
 from .world import KIND_NAMES, TRACK_SHARED
 
 
@@ -66,6 +67,8 @@ class Report:
         self.section('textures (kind 9)', self.textures)
         self.section('re-encode test (our encoder vs the original)', self.encoder)
         self.section('dry run: fog and texture edits (nothing is written)', self.dry_run)
+        self.section('geometry: SDB sizes and counts (for adding new geometry)', self.geometry)
+        self.section('courses: race lines, start, terrain dry run', self.courses)
         return self.data
 
     # ------------------------------------------------------------------------
@@ -414,3 +417,132 @@ class Report:
         self.out(f'  OK: {len(report)} blocks re-encoded, methods {dict(methods)}, '
                  f'padding used {sum(x["used_padding"] for x in report)} bytes; output verified')
         self.data['dry_run'] = report
+
+    def geometry(self):
+        import struct as st
+        w, s = self.w, self.w.stream
+        raw = w._member('.sdb')
+        start = (80 + 88 * w.sdb.location_count + 15) & ~15
+        sub_start = start + 96 * w.sdb.chunk_info_count
+        align_of = {1: 16, 2: 16, 3: 16, 11: 16, 12: 16, 9: 128, 10: 128}
+        hyps = collections.Counter()
+        rows = []
+        count_ok = shorts_ok = 0
+        for c in range(len(s.chunks)):
+            p = sub_start + 68 * c
+            if p + 68 > len(raw):
+                break
+            u16 = st.unpack_from('<20H', raw, p)
+            nrec, cid = u16[0], u16[1]
+            off, size = st.unpack_from('<2I', raw, p + 4)
+            recs = s.records(c, keep=False)
+            kinds = collections.Counter(r.kind for r in recs)
+            count_ok += nrec == len(recs) and cid == c and off == s.chunks[c].blocks[0].offset
+            counts = list(u16[6:19])
+            shorts_ok += counts == [kinds.get(k, 0) for k in range(13)]
+            dec = s.chunks[c].decoded_size
+            variants = {}
+            for hdr in (0, 8):
+                for aligned in (False, True):
+                    for skip_name, skip in (('none', ()), ('14', (14,)), ('20', (20,)), ('14+20', (14, 20)),
+                                            ('9+10', (9, 10)), ('9+10+14+20', (9, 10, 14, 20))):
+                        total = 0
+                        for r in recs:
+                            if r.kind in skip:
+                                continue
+                            n = r.size + hdr
+                            if aligned:
+                                a = align_of.get(r.kind, 4)
+                                n = (n + a - 1) // a * a
+                            total += n
+                        variants[f'hdr{hdr} {"aligned" if aligned else "raw"} skip {skip_name}'] = total
+            for name, total in variants.items():
+                hyps[name] += total == size
+            rows.append((c, size, dec, variants))
+        n = len(rows)
+        self.out(f'  sub-chunk infos: record count, chunk id and SSB offset match for {count_ok}/{n}; '
+                 f'per-kind counts (u16 6..18 = kinds 0..12) match for {shorts_ok}/{n}')
+        best = hyps.most_common(4)
+        self.out(f'  size field (+8) hypotheses, chunks matching: {best}')
+        diffs = [size - dec for _, size, dec, _ in rows]
+        self.out(f'  size field minus decoded size: {_dist(diffs)}')
+        for c, size, dec, variants in rows[:3] + [r for r in rows if r[0] in (33, 36)]:
+            close = min(variants.items(), key=lambda kv: abs(kv[1] - size))
+            self.out(f'   chunk {c}: field {size}, decoded {dec}, closest {close[0]} = {close[1]}')
+        # Location shorts = record counts of the location's main chunk?
+        match = 0
+        for loc in w.sdb.locations:
+            kinds = collections.Counter(r.kind for r in s.records(loc.chunk_end, keep=False))
+            match += list(loc.shorts[:23]) == [kinds.get(k, 0) for k in range(23)]
+        self.out(f'  location shorts 0..22 = record counts of the last chunk: {match}/{len(w.sdb.locations)}')
+        # Patch box rule.
+        rules = collections.Counter()
+        sampled = self._sample_records(1, 300)
+        for _, _, d in sampled:
+            p = terrain.Patch(d)
+            lo, hi = p.bbox
+            net = [q for row in p.control_net() for q in row]
+            nlo = [min(q[k] for q in net) for k in range(3)]
+            nhi = [max(q[k] for q in net) for k in range(3)]
+            dense = [p.point(u / 8, v / 8) for u in range(9) for v in range(9)]
+            dlo = [min(q[k] for q in dense) for k in range(3)]
+            dhi = [max(q[k] for q in dense) for k in range(3)]
+            close = lambda a, b: all(abs(x - y) <= 0.05 + 1e-5 * abs(y) for x, y in zip(a, b))
+            rules['box = control net'] += close(lo, nlo) and close(hi, nhi)
+            rules['box ~ surface (8x8)'] += all(abs(x - y) < 2 for x, y in zip(lo + hi, dlo + dhi))
+            rules['box contains surface'] += all(lo[k] - 0.05 <= q[k] <= hi[k] + 0.05 for q in dense for k in range(3))
+            sph = st.unpack_from('<4f', d, terrain.SPHERE)
+            rules['sphere contains surface'] += all(math.dist(sph[:3], q) <= sph[3] + 0.05 for q in dense)
+        self.out(f'  terrain box/sphere rules over {len(sampled)} patches: {dict(rules)}')
+        # Rails: what is row50?
+        rails = self._sample_records(8, 40)
+        kinds = collections.Counter()
+        for _, _, d in rails:
+            for k in range((len(d) - 48) // 144):
+                b = 48 + 144 * k
+                row50 = st.unpack_from('<4f', d, b + 0x50)
+                lo = st.unpack_from('<3f', d, b + 0x6C)
+                hi = st.unpack_from('<3f', d, b + 0x78)
+                inside = all(lo[i] - 1 <= row50[i] <= hi[i] + 1 for i in range(3))
+                unit = abs(math.sqrt(sum(v * v for v in row50[:3])) - 1) < 1e-3
+                kinds['row50 inside segment box' if inside else 'row50 unit vector' if unit else 'row50 other'] += 1
+        self.out(f'  rail segment row50: {dict(kinds)}')
+        if rails:
+            d = rails[0][2]
+            self.out(f'   first rail segment rows: {[round(v, 2) for v in st.unpack_from("<20f", d, 48 + 0x10)]}')
+
+    def courses(self):
+        w = self.w
+        codes = ['ARA1', 'BRA2', 'CRA3', 'DRA4', 'ERA5', 'ASS1', 'ABA1', 'BHP1', 'ABC1']
+        for code in codes:
+            try:
+                course = mapedit.course_aip(w, code)
+            except KeyError:
+                continue
+            if course is None:
+                self.out(f'  {code}: no AIP')
+                continue
+            path = course.main_path()
+            start = course.start()
+            fits = path.fits_bounds() if path else None
+            self.out(f'  {code}: {len(course.ai_paths)} AI paths, {len(course.track_paths)} track paths, '
+                     f'{len(course.regions)} regions; main line {path.length / 100 if path else 0:.0f} m, '
+                     f'{len(path.segments) if path else 0} segments, inside its bounds: {fits}; start '
+                     f'{tuple(round(v / 100, 1) for v in start.position) if start else None}')
+        # Terrain dry run: a 3 m kicker 200 m down Snow Jam, re-encoded in memory.
+        try:
+            from .world import World
+            probe = World.__new__(World)
+            probe.__dict__.update(w.__dict__)
+            probe.stream = ssb.WorldStream(w.stream.original)
+            pl = mapedit.place(probe, 'ARA1', along=200.0)
+            dz = terrain.kicker(pl.frame, 300.0, 1500.0, 1000.0, 500.0, 400.0)
+            rep = mapedit.apply_field(probe, 'ARA1', pl.frame, dz)
+            self.out(f'  ARA1 kicker at 200 m: x {pl.frame.x / 100:.1f} y {pl.frame.y / 100:.1f} '
+                     f'z {pl.z / 100 if pl.z is not None else None}; {rep.patches} patches, {rep.objects} objects, '
+                     f'{rep.points} points, rails in area {len(rep.rails_in_area)}')
+            image, report = probe.stream.build()
+            probe.stream.verify(image)
+            self.out(f'  re-encoded and verified: {collections.Counter(x["method"] for x in report)}')
+        except Exception as e:      # noqa: BLE001
+            self.out(f'  terrain dry run failed: {type(e).__name__}: {e}')

@@ -178,30 +178,64 @@ class WorldStream:
         """Return the new bam.ssb image (same size and layout as the original)."""
         out = bytearray(self.original)
         report = []
+        max_decoded = max(b.decoded_size for b in self.blocks)
         for index in self.changed_chunks():
-            data = self._decoded[index]
+            data = bytes(self._decoded[index])
             chunk = self.chunks[index]
             if len(data) != chunk.decoded_size:
                 raise StreamError(
                     f'chunk {index} changed size ({chunk.decoded_size} -> {len(data)} bytes); '
                     'only same-size edits are supported')
-            pos = 0
-            for block in chunk.blocks:
-                piece = bytes(data[pos:pos + block.decoded_size])
-                pos += block.decoded_size
+            bounds = [0]
+            for b in chunk.blocks:
+                bounds.append(bounds[-1] + b.decoded_size)
+            k = 0
+            while k < len(chunk.blocks):
+                block = chunk.blocks[k]
+                piece = data[bounds[k]:bounds[k + 1]]
                 if piece == self.original_block_data(block):
+                    k += 1
                     continue
                 if progress:
                     progress(f'chunk {index} block {block.index}: re-encoding {len(piece)} bytes')
                 payload = self.block_payload(block)
-                encoded, method, used_padding = self._reencode(index, block, payload, piece)
+                try:
+                    encoded, method, used_padding = self._reencode(index, block, payload, piece)
+                except StreamError:
+                    # Spread this block and the next ones' data over the same blocks again.
+                    k, entries = self._rebalance(index, chunk, bounds, data, k, max_decoded, out, progress)
+                    report.extend(entries)
+                    continue
                 assert len(encoded) == len(payload)
                 out[block.payload_offset:block.offset + block.extent] = encoded
                 report.append(dict(chunk=index, block=block.index, offset=block.offset,
                                    decoded=len(piece), method=method, used_padding=used_padding))
+                k += 1
         if len(out) != len(self.original):
             raise AssertionError('world stream changed size')
         return bytes(out), report
+
+    def _rebalance(self, index, chunk, bounds, data, k, max_decoded, out, progress):
+        """Re-pack the decoded bytes of blocks k..k+w-1 into those same w blocks,
+        moving the boundaries between them (records may straddle blocks anyway).
+        Every block keeps its offset and extent; the window ends on an original
+        boundary so the blocks after it are untouched. Returns (next k, report)."""
+        blocks = chunk.blocks
+        for w in range(2, len(blocks) - k + 1):
+            window = blocks[k:k + w]
+            span = data[bounds[k]:bounds[k + w]]
+            if progress:
+                progress(f'chunk {index}: re-packing blocks {window[0].index}..{window[-1].index}')
+            payloads = _pack(span, [b.extent - 8 for b in window], max_decoded)
+            if payloads is None:
+                continue
+            entries = []
+            for b, (payload, decoded) in zip(window, payloads):
+                out[b.payload_offset:b.offset + b.extent] = payload
+                entries.append(dict(chunk=index, block=b.index, offset=b.offset, decoded=decoded,
+                                    method='repack', used_padding=0))
+            return k + w, entries
+        raise StreamError(f'chunk {index}: the edited data does not fit in its blocks any more')
 
     def _reencode(self, index, block, payload, piece):
         """New payload bytes for `block`, exactly as long as the original payload.
@@ -239,3 +273,55 @@ class WorldStream:
             if got != bytes(self._decoded[index]):
                 raise StreamError(f'chunk {index} does not decode to the edited data')
         return True
+
+
+def _fits(data, capacity):
+    return len(refpack.compress(data)) <= capacity
+
+
+def _pack(span, capacities, max_decoded):
+    """Split `span` over len(capacities) RefPack blocks: [(payload, decoded size)] or None.
+
+    Each payload is a stream padded with zeros to its block's capacity (the
+    retail blocks are padded the same way). Every block but the last takes as
+    many bytes as fit.
+    """
+    out = []
+    pos = 0
+    for i, cap in enumerate(capacities):
+        rest = span[pos:]
+        last = i == len(capacities) - 1
+        if last:
+            if not rest or len(rest) > max_decoded or not _fits(rest, cap):
+                return None
+            take = len(rest)
+        else:
+            hi = min(len(rest) - (len(capacities) - 1 - i), max_decoded)     # leave >= 1 byte per later block
+            if hi < 1:
+                return None
+            if _fits(rest[:hi], cap):
+                take = hi
+            else:
+                good, bad = 0, hi
+                probe = hi
+                while True:             # step down quickly, then bisect
+                    probe = max(1, int(probe * 0.97))
+                    if _fits(rest[:probe], cap):
+                        good = probe
+                        break
+                    bad = probe
+                    if probe == 1:
+                        return None
+                while bad - good > 64:
+                    mid = (good + bad) // 2
+                    if _fits(rest[:mid], cap):
+                        good = mid
+                    else:
+                        bad = mid
+                take = good
+        stream = refpack.compress(rest[:take])
+        if len(stream) > cap:
+            return None
+        out.append((stream + bytes(cap - len(stream)), take))
+        pos += take
+    return out if pos == len(span) else None

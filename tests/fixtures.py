@@ -178,3 +178,139 @@ def build_iso(big, extra=b'SLUS_207.72 placeholder'):
     img[big_lba * S:big_lba * S + len(big)] = big
     img[-S:] = b'\xAA' * S        # something after the file that must stay untouched
     return bytes(img)
+
+
+# --------------------------------------------------------------------------
+# A small course with terrain, objects and a race path
+# --------------------------------------------------------------------------
+
+PATCH_M = 500.0     # 5 m patches
+
+
+def height(x, y):
+    """A slope falling towards +y with some waviness and a little noise (cm)."""
+    import math
+    noise = math.sin(x * 12.9898 + y * 78.233) * 43758.5453
+    noise = (noise - math.floor(noise) - 0.5) * 6.0
+    return -0.3 * y + 150.0 * math.sin(x / 1500.0) + 80.0 * math.cos(y / 2100.0) + noise
+
+
+def build_ssb_slots(chunks, slot=8192, worse=0.015):
+    """Like the retail bam.ssb: fixed-size blocks, each filled with as much data as the
+    (here: emulated, `worse` bigger than ours) original encoder could fit, zero padded."""
+    cap = slot - 8
+
+    def ea_size(piece):
+        return int(len(refpack.compress(piece)) * (1 + worse)) + 4
+
+    out = bytearray()
+    for data in chunks:
+        pos = 0
+        while pos < len(data):
+            rest = data[pos:]
+            if ea_size(rest) <= cap:
+                take = len(rest)
+            else:
+                good, bad = 1, len(rest)
+                while bad - good > 32:
+                    mid = (good + bad) // 2
+                    if ea_size(rest[:mid]) <= cap:
+                        good = mid
+                    else:
+                        bad = mid
+                take = good
+            piece = rest[:take]
+            stream = refpack.compress_exact(piece, ea_size(piece))
+            pos += take
+            tag = b'CEND' if pos >= len(data) else b'CBXS'
+            out += tag + struct.pack('<I', slot) + stream + bytes(cap - len(stream))
+    return bytes(out)
+
+
+def patch_record(x0, y0, track, rid, corner_order=((0, 0), (1, 0), (0, 1), (1, 1))):
+    from ssx3map import terrain
+    grid = terrain.GRID
+    zs = [[height(x0 + u * PATCH_M, y0 + v * PATCH_M) for u in grid] for v in grid]
+    vinv = terrain._VINV
+    tmp = [[sum(vinv[i][a] * zs[b][a] for a in range(4)) for i in range(4)] for b in range(4)]
+    cz = [[sum(vinv[j][b] * tmp[b][i] for b in range(4)) for i in range(4)] for j in range(4)]
+    rec = bytearray(432)
+    struct.pack_into('<hh', rec, 8, 2, 9)
+    for j in range(4):
+        for i in range(4):
+            cx = x0 if (i, j) == (0, 0) else PATCH_M if (i, j) == (1, 0) else 0.0
+            cy = y0 if (i, j) == (0, 0) else PATCH_M if (i, j) == (0, 1) else 0.0
+            struct.pack_into('<4f', rec, 0x40 + 16 * (15 - (4 * j + i)), cx, cy, cz[j][i], 0.0)
+    p = terrain.Patch(bytes(rec))
+    corners = p.corners()
+    for o, uv in zip(terrain.CORNERS, corner_order):
+        struct.pack_into('<3f', rec, o, *corners[uv])
+    net = [q for row in p.control_net() for q in row]
+    lo = [min(q[k] for q in net) - 0.5 for k in range(3)]
+    hi = [max(q[k] for q in net) + 0.5 for k in range(3)]
+    struct.pack_into('<3f', rec, terrain.BBOX_MIN, *lo)
+    struct.pack_into('<3f', rec, terrain.BBOX_MAX, *hi)
+    centre = [(a + b) / 2 for a, b in zip(lo, hi)]
+    struct.pack_into('<4f', rec, terrain.SPHERE, *centre, 400.0)
+    struct.pack_into('<I', rec, terrain.RESOURCE, (rid << 8) | track)
+    struct.pack_into('<hh', rec, terrain.TEXTURE, 7, 0)
+    return bytes(rec)
+
+
+def terrain_grid(x0, y0, nx, ny, track, first_rid=0, corner_order=((0, 0), (1, 0), (0, 1), (1, 1))):
+    out = b''
+    rid = first_rid
+    for j in range(ny):
+        for i in range(nx):
+            out += record(1, track, rid, patch_record(x0 + i * PATCH_M, y0 + j * PATCH_M, track, rid, corner_order))
+            rid += 1
+    return out
+
+
+def placed_instance(x, y, track, rid, size=200.0):
+    z = height(x, y)
+    m = (1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1)
+    data = (bytes(16) + struct.pack('<16f', *m) + struct.pack('<4f', x, y, z + size / 2, size)
+            + struct.pack('<3f', x - size / 2, y - size / 2, z) + struct.pack('<3f', x + size / 2, y + size / 2, z + size)
+            + struct.pack('<I', (rid << 8) | track) + bytes(4) + struct.pack('<I', 5 << 8) + bytes(0x40))
+    return record(3, track, rid, data)
+
+
+def aip_record(points, regions):
+    """One track path through `points` (cm) plus region rows [(slot, kind, (x, y, z), (dx, dy, dz))]."""
+    import math
+    segs = []
+    for a, b in zip(points, points[1:]):
+        d = [b[k] - a[k] for k in range(3)]
+        n = math.sqrt(sum(v * v for v in d))
+        segs.append((d[0] / n, d[1] / n, d[2] / n, n))
+    lo = [min(p[k] for p in points) for k in range(3)]
+    hi = [max(p[k] for p in points) for k in range(3)]
+    out = struct.pack('<I', 0x41495031) + struct.pack('<I', 0)
+    out += struct.pack('<I', 1) + struct.pack('<IIIf', 0, 0, 0, 0.0) + struct.pack('<II', len(segs), 0)
+    out += struct.pack('<3f', *points[0]) + struct.pack('<3f', *lo) + struct.pack('<3f', *hi)
+    out += b''.join(struct.pack('<4f', *s) for s in segs)
+    out += struct.pack('<I', 0)
+    out += struct.pack('<I', len(regions))
+    for slot, kind, p, d in regions:
+        out += struct.pack('<II', slot, kind) + struct.pack('<6f', *p, *d) + struct.pack('<II', 0, 0)
+    return out
+
+
+def build_course_world():
+    """AAA: 6 x 10 patches (30 m x 50 m) with a path down the middle; A_AAA continues below it."""
+    xs = 15 * PATCH_M / 5
+    line = [(xs, y, height(xs, y)) for y in (100.0, 1500.0, 3000.0, 4900.0)]
+    regions = [(0, 0, line[0], (0.0, 1.0, 0.0)), (1, 1, (xs, 2500.0, height(xs, 2500.0)), (0.0, 1.0, 0.0))]
+    main = (terrain_grid(0.0, 0.0, 6, 10, 0, corner_order=((0, 0), (0, 1), (1, 0), (1, 1)))
+            + placed_instance(1500.0, 2500.0, 0, 1) + placed_instance(200.0, 300.0, 0, 2)
+            + record(14, 0, 0, aip_record(line, regions)) + record(14, 0, 1, b'')
+            + record(15, 0, 0, painter_record([(0.5, 2.0, 3000.0, 10000.0, 0.7, 0.8, 1.0)])))
+    connector = terrain_grid(0.0, 10 * PATCH_M, 6, 4, 1) + record(15, 1, 0, painter_record(
+        [(0.5, 2.0, 3000.0, 8000.0, 0.6, 0.7, 0.9)]))
+    chunks = [record(9, 255, 7, texture_8bit(32, 32, 1)), main, connector,
+              record(15, 2, 0, painter_record([(1.0, 0.0, 1.0, 2.0, 0, 0, 0)]))]
+    ssb = build_ssb_slots(chunks)
+    sdb = build_sdb([('AAA', 1), ('A_AAA', 2), ('ASKY', 3)])
+    big = build_big([('bam.sdb', sdb), ('bam.ssb', ssb), ('bam.phm', bytes(16)), ('bam.psm', bytes(16))])
+    return big, chunks

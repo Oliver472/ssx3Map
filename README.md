@@ -99,6 +99,56 @@ kde sa textúra používa. `--location ARA1` namiesto `--texture` prefarbí
 všetky textúry, ktoré lokácia používa. Pri paletových textúrach sa mení
 paleta, takže sa zmenia aj všetky mipmapy.
 
+## 4. Úpravy trate: terén a objekty
+
+Terén v SSX 3 je zároveň kolízia: čo zdvihneš alebo znížiš, po tom sa aj jazdí.
+
+**Mapa trate.** Najprv si nakresli trať zhora a otvor výsledné SVG v prehliadači.
+Červená čiara je trasa so značkami metrov od štartu, zelené body sú objekty.
+Keď myšou prejdeš nad plochu, ukážu sa súradnice.
+
+```
+python3 -m ssx3map map "SSX 3 (USA).iso" --location ARA1 -o snowjam.svg
+```
+
+**Terén.** Miesto zadáš jedným z týchto spôsobov:
+- `--along 250`: 250 m od štartu po trase,
+- `--side 6`: posun 6 m doprava od tohto bodu (záporné číslo je doľava),
+- `--at X Y`: súradnice v metroch z mapy,
+- `--start`: pri štarte.
+
+Tvary:
+- `kicker`: skok, ktorý sa otáča po smere trate. Parametre `--height`,
+  `--length`, `--width`, `--drop`.
+- `bump`: kopec, a pri zápornej výške jama. Parametre `--height`, `--radius`.
+- `plateau`: zdvihnutá alebo znížená plocha s rovným vrchom.
+- `flatten`: zarovná okolie na výšku daného bodu. `--height` k nej pripočíta
+  posun.
+
+```
+# 3 m skok, 250 m od štartu Snow Jamu
+python3 -m ssx3map terrain "SSX 3 (USA).iso" --location ARA1 --along 250 ^
+    --shape kicker --height 3 --length 15 --width 12 -o SSX3_skok.iso
+```
+
+Stromy a ostatné objekty na upravenom teréne sa posunú spolu s ním. Posunú
+sa aj body štartu a resetu. Ak sú v oblasti zábradlia (rails), nástroj
+vypíše upozornenie, lebo tie sa zatiaľ neposúvajú.
+
+**Objekty.** Môžeš ich vypísať, posunúť alebo odstrániť. Odstránenie ich
+presunie 1 km pod horu a spolu s nimi aj ich kolíziu.
+
+```
+python3 -m ssx3map objects "SSX 3 (USA).iso" --location ARA1 --along 400 --radius 25
+python3 -m ssx3map objects "SSX 3 (USA).iso" --location ARA1 --along 400 --radius 25 --name tree --remove -o SSX3_bez_stromov.iso
+```
+
+Herné pomocné objekty (štart, triggery, resety, ploty režimov) sa bez
+`--force` nemenia.
+
+Na jedno ISO sa dá spraviť viac úprav za sebou: výstup jedného príkazu
+použi ako vstup ďalšieho.
+
 ## Ďalšie príkazy
 
 ```
@@ -130,9 +180,10 @@ Spojky sa volajú podľa lokácií, ktoré spájajú (napr. `A_ARA1`). Oblohy s�
 
 - Zmena veľkosti záznamov: nové objekty, iný počet trojuholníkov a podobne.
   Na to treba pochopiť a prepisovať `bam.sdb`.
-- Posúvanie objektov a terénu. Polohy sú známe, ale kolízie (záznamy druhu
-  12) sú samostatné a pri posune by ostali na pôvodnom mieste. Na tom je
-  ďalší krok.
+- Posúvanie zábradlí (rails) a AI trás spolu s terénom. AI jazdci jazdia po
+  teréne, ich trasa sa však nemení.
+- Osvetlenie terénu je zapečené v textúrach, takže nový kopec nemá
+  vlastné tiene.
 - Import vlastného PNG do textúry. Hotový je export a prefarbenie.
 
 ## Testy

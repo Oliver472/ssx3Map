@@ -7,7 +7,7 @@ import os
 import sys
 import time
 
-from . import painter, texture
+from . import instances, mapedit, painter, terrain, texture
 from .world import KIND_NAMES, World, resolve_input
 
 
@@ -195,6 +195,108 @@ def cmd_textures(args):
     print(f'exported {len(done)} textures to {args.export}' + (f' ({failed} failed)' if failed else ''))
 
 
+def _placement(w, args):
+    return mapedit.place(w, args.location, along=args.along, side=args.side or 0.0,
+                         xy=tuple(args.at) if args.at else None, start=args.start)
+
+
+def _describe(pl):
+    z = f'{pl.z / 100:.1f} m' if pl.z is not None else 'mimo terénu'
+    return (f'{pl.description}: x {pl.frame.x / 100:.1f} m, y {pl.frame.y / 100:.1f} m, výška terénu {z}, '
+            f'smer ({pl.frame.fx:.2f}, {pl.frame.fy:.2f})')
+
+
+def cmd_map(args):
+    w = _open(args.input)
+    svg = mapedit.svg_map(w, args.location, objects=not args.no_objects)
+    out = args.output or f'{args.location}.svg'
+    with open(out, 'w', encoding='utf-8') as f:
+        f.write(svg)
+    course = mapedit.course_aip(w, args.location)
+    path = course.main_path() if course else None
+    print(f'wrote {out}' + (f'; course line {path.length / 100:.0f} m' if path else ''))
+
+
+SHAPES = ('bump', 'plateau', 'kicker', 'flatten')
+
+
+def cmd_terrain(args):
+    w = _open(args.input)
+    _check_output(args, w)
+    if not args.output:
+        raise SystemExit('give -o OUTPUT')
+    if abs(args.height) > 60 and not args.force:
+        raise SystemExit('heights beyond 60 m are refused without --force')
+    pl = _placement(w, args)
+    print('miesto: ' + _describe(pl))
+    f, cm = pl.frame, 100.0
+    if args.shape == 'bump':
+        dz = terrain.bump(f, args.height * cm, (args.radius or 12) * cm)
+    elif args.shape == 'plateau':
+        dz = terrain.plateau(f, args.height * cm, (args.radius or 10) * cm, (args.edge or 8) * cm)
+    elif args.shape == 'kicker':
+        dz = terrain.kicker(f, args.height * cm, (args.length or 15) * cm, (args.width or 10) * cm,
+                            (args.drop or 5) * cm, (args.edge or 4) * cm)
+    else:
+        if pl.z is None:
+            raise SystemExit('flatten needs a point on the terrain')
+        dz = terrain.flatten_to(f, pl.z + args.height * cm, (args.radius or 12) * cm, (args.edge or 8) * cm)
+    report = mapedit.apply_field(w, args.location, f, dz, carry_objects=not args.no_carry,
+                                 move_points=not args.no_carry)
+    if not report.patches:
+        raise SystemExit('no terrain patch was changed (the place is off the terrain, or the shape is smaller '
+                         'than one patch, about 4 m); nothing written')
+    print(f'terén: {report.patches} plátov, najväčší posun {report.max_dz / cm:.2f} m; objekty posunuté '
+          f'{report.objects} (ponechané veľké {report.objects_skipped}); štart/reset body {report.points}')
+    if report.rails_in_area:
+        print(f'POZOR: {len(report.rails_in_area)} zábradlí/rails v oblasti sa neposúva: '
+              + ', '.join(report.rails_in_area[:8]), file=sys.stderr)
+    _save(args, w)
+
+
+PROTECTED = ('trig', 'reset', 'fence', 'collide', 'nis_', 'transport', 'lodge', 'skybox', 'load', 'finish', 'start')
+
+
+def cmd_objects(args):
+    w = _open(args.input)
+    _check_output(args, w)
+    frame = None
+    if args.along is not None or args.at or args.start:
+        pl = _placement(w, args)
+        frame = pl.frame
+        print('okolie: ' + _describe(pl) + f', polomer {args.radius:.0f} m')
+    found = mapedit.find_objects(w, args.location, name=args.name, frame=frame,
+                                 radius=args.radius * 100 if frame else None)
+    acting = args.remove or args.move or args.raise_by is not None
+    for c, rec, inst, label in found:
+        x, y, z = inst.centre
+        sx, sy, sz = inst.size
+        print(f'{label:48s} x {x / 100:9.1f} y {y / 100:9.1f} z {z / 100:8.1f}  rozmer {sx / 100:.1f}x{sy / 100:.1f}x{sz / 100:.1f} m')
+    print(f'{len(found)} objektov')
+    if not acting:
+        return
+    if not args.output:
+        raise SystemExit('give -o OUTPUT')
+    done = skipped = 0
+    for c, rec, inst, label in found:
+        if not args.force and any(k in label.lower() for k in PROTECTED):
+            skipped += 1
+            continue
+        if args.remove:
+            d = (0.0, 0.0, -100000.0)          # 1 km under the mountain, collision included
+        elif args.move:
+            d = tuple(v * 100 for v in args.move)
+        else:
+            d = (0.0, 0.0, args.raise_by * 100)
+        instances.translate(w.stream.chunk(c), rec.offset, *d)
+        done += 1
+    print(f'{"odstránené" if args.remove else "posunuté"}: {done}'
+          + (f'; vynechané herné pomocné objekty (štart, triggery, resety...): {skipped} (--force ich zahrnie)'
+             if skipped else ''))
+    if done:
+        _save(args, w)
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog='ssx3map', description='SSX 3 (PS2) world editor: edits BAM.BIG in place.')
     sub = p.add_subparsers(dest='command', required=True)
@@ -238,6 +340,43 @@ def main(argv=None):
     sp.add_argument('--export', required=True, help='output folder')
     sp.add_argument('--texture', type=int, action='append')
     sp.add_argument('--location', action='append')
+
+    def placement_args(sp):
+        sp.add_argument('--location', required=True, help='course code, e.g. ARA1 (Snow Jam)')
+        sp.add_argument('--along', type=float, help='metres along the course line from the start')
+        sp.add_argument('--side', type=float, help='metres to the right (negative: left) of that point')
+        sp.add_argument('--at', type=float, nargs=2, metavar=('X', 'Y'), help='world position in metres (from the map)')
+        sp.add_argument('--start', action='store_true', help='at the start grid')
+
+    sp = add('map', cmd_map, 'draw a course from above as SVG (open it in a browser)')
+    sp.add_argument('--location', required=True)
+    sp.add_argument('--no-objects', action='store_true')
+    sp.add_argument('-o', '--output', help='output .svg')
+
+    sp = add('terrain', cmd_terrain, 'reshape the terrain (riders collide with it)')
+    placement_args(sp)
+    sp.add_argument('--shape', choices=SHAPES, required=True)
+    sp.add_argument('--height', type=float, required=True, help='metres (negative lowers)')
+    sp.add_argument('--radius', type=float, help='metres (bump, plateau, flatten)')
+    sp.add_argument('--length', type=float, help='kicker run-up, metres')
+    sp.add_argument('--width', type=float, help='kicker width, metres')
+    sp.add_argument('--drop', type=float, help='kicker landing side, metres')
+    sp.add_argument('--edge', type=float, help='blend width at the borders, metres')
+    sp.add_argument('--no-carry', action='store_true', help='do not move objects and start/reset points along')
+    sp.add_argument('--force', action='store_true')
+    sp.add_argument('-o', '--output', help='output .iso or .BIG')
+    sp.add_argument('-v', '--verbose', action='store_true')
+
+    sp = add('objects', cmd_objects, 'list, move or remove objects (their collision moves with them)')
+    placement_args(sp)
+    sp.add_argument('--radius', type=float, default=20.0, help='metres around the place (default 20)')
+    sp.add_argument('--name', help='only objects whose name contains this')
+    sp.add_argument('--remove', action='store_true', help='remove (sink 1 km under the mountain)')
+    sp.add_argument('--move', type=float, nargs=3, metavar=('DX', 'DY', 'DZ'), help='move by metres')
+    sp.add_argument('--raise', dest='raise_by', type=float, metavar='DZ', help='move up/down by metres')
+    sp.add_argument('--force', action='store_true', help='also touch start/trigger/reset helpers')
+    sp.add_argument('-o', '--output', help='output .iso or .BIG')
+    sp.add_argument('-v', '--verbose', action='store_true')
 
     args = p.parse_args(argv)
     args.fn(args)
