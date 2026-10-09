@@ -21,7 +21,8 @@ ride. Units are centimetres, Z up.
 A deformation adds a height field dz(x, y). Each touched patch is sampled on a
 4 x 4 grid (u, v in 0, 1/3, 2/3, 1), the samples are displaced and the bicubic
 is refitted through them, so patches that share an edge also share the
-displaced edge. Only Z changes; X/Y coefficients are left bit-identical.
+displaced edge. Height edits change only Z (X/Y coefficients stay bit-identical);
+`displace` moves patches sideways too (see warp.py).
 """
 from __future__ import annotations
 
@@ -124,10 +125,26 @@ def deform(buf, offset, dz):
 
     Returns the largest |dz| applied (0.0 if the patch was not touched).
     """
+    return displace(buf, offset, lambda x, y, z: (0.0, 0.0, dz(x, y, z)))
+
+
+def _fit(d):
+    """Power-basis coefficients coef[j][i] of the 4 x 4 samples d[v][u]: Vinv * d * Vinv^T."""
+    tmp = [[sum(_VINV[i][a] * d[b][a] for a in range(4)) for i in range(4)] for b in range(4)]   # tmp[b][i]
+    return [[sum(_VINV[j][b] * tmp[b][i] for b in range(4)) for i in range(4)] for j in range(4)]
+
+
+def displace(buf, offset, field):
+    """Move the patch at buf[offset:offset+432] by the vector field field(x, y, z) -> (dx, dy, dz).
+
+    The patch is sampled on the 4 x 4 grid, the samples are moved and the bicubic
+    is refitted through them; corners, box and sphere are rebuilt. Components the
+    field leaves at zero stay bit-identical. Returns the largest displacement length.
+    """
     patch = Patch(buf[offset:offset + PATCH_SIZE])
     samples = [[patch.point(u, v) for u in GRID] for v in GRID]       # samples[b][a] at (u=GRID[a], v=GRID[b])
-    d = [[dz(*p) for p in row] for row in samples]
-    biggest = max(abs(x) for row in d for x in row)
+    d = [[field(*p) for p in row] for row in samples]
+    biggest = max(math.sqrt(sum(c * c for c in x)) for row in d for x in row)
     if biggest == 0.0:
         return 0.0
     # Which stored corner slot holds which (u, v) corner; decided before editing.
@@ -135,14 +152,16 @@ def deform(buf, offset, dz):
     slot_uv = []
     for p in patch.stored_corners:
         slot_uv.append(min(old_corners, key=lambda uv: sum((a - b) ** 2 for a, b in zip(old_corners[uv], p))))
-    # Coefficients of the displacement: D = Vinv * d * Vinv^T  (d indexed [v][u]).
-    tmp = [[sum(_VINV[i][a] * d[b][a] for a in range(4)) for i in range(4)] for b in range(4)]   # tmp[b][i]
-    coef = [[sum(_VINV[j][b] * tmp[b][i] for b in range(4)) for i in range(4)] for j in range(4)]  # coef[j][i]
-    for j in range(4):
-        for i in range(4):
-            at = offset + COEFF + 16 * (15 - (4 * j + i)) + 8      # z component
-            z, = struct.unpack_from('<f', buf, at)
-            struct.pack_into('<f', buf, at, z + coef[j][i])
+    for k in range(3):
+        dk = [[x[k] for x in row] for row in d]
+        if not any(v for row in dk for v in row):
+            continue
+        coef = _fit(dk)
+        for j in range(4):
+            for i in range(4):
+                at = offset + COEFF + 16 * (15 - (4 * j + i)) + 4 * k
+                c, = struct.unpack_from('<f', buf, at)
+                struct.pack_into('<f', buf, at, c + coef[j][i])
     new = Patch(buf[offset:offset + PATCH_SIZE])
     corners = new.corners()
     for o, uv in zip(CORNERS, slot_uv):

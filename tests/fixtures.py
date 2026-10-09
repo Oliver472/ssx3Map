@@ -332,20 +332,39 @@ def light_page(w=16, h=16):
     return header + texels
 
 
-def aip_record(points, regions):
-    """One track path through `points` (cm) plus region rows [(slot, kind, (x, y, z), (dx, dy, dz))]."""
+def _segments(points):
+    """AIP segments as on the disc: horizontal unit direction, slope, horizontal length."""
     import math
     segs = []
     for a, b in zip(points, points[1:]):
         d = [b[k] - a[k] for k in range(3)]
-        n = math.sqrt(sum(v * v for v in d))
-        segs.append((d[0] / n, d[1] / n, d[2] / n, n))
-    lo = [min(p[k] for p in points) for k in range(3)]
-    hi = [max(p[k] for p in points) for k in range(3)]
-    out = struct.pack('<I', 0x41495031) + struct.pack('<I', 0)
-    out += struct.pack('<I', 1) + struct.pack('<IIIf', 0, 0, 0, 0.0) + struct.pack('<II', len(segs), 0)
+        w = math.hypot(d[0], d[1])
+        segs.append((d[0] / w, d[1] / w, d[2] / w, w))
+    return segs
+
+
+def _path_body(points, events):
+    lo = [min(p[k] for p in points) - 100 for k in range(3)]
+    hi = [max(p[k] for p in points) + 100 for k in range(3)]
+    segs = _segments(points)
+    out = struct.pack('<II', len(segs), len(events))
     out += struct.pack('<3f', *points[0]) + struct.pack('<3f', *lo) + struct.pack('<3f', *hi)
     out += b''.join(struct.pack('<4f', *s) for s in segs)
+    out += b''.join(struct.pack('<IIff', *e) for e in events)
+    return out
+
+
+def aip_record(points, regions, ai=(), events=(), remaining=None):
+    """One track path through `points` (cm) plus region rows [(slot, kind, (x, y, z), (dx, dy, dz))].
+
+    `ai`: AI paths [(points, events)]; `events`: the track path's [(type, value, start, end)];
+    `remaining`: the track path's remaining race distance at its origin (default: its length)."""
+    if remaining is None:
+        remaining = sum(s[3] for s in _segments(points))
+    out = struct.pack('<I', 0x41495031) + struct.pack('<I', len(ai))
+    for pts, evs in ai:
+        out += struct.pack('<7I', 0, 0, 0, 1, 0, 0, 7) + _path_body(pts, evs)
+    out += struct.pack('<I', 1) + struct.pack('<IIIf', 0, 0, 0, remaining) + _path_body(points, events)
     out += struct.pack('<I', 0)
     out += struct.pack('<I', len(regions))
     for slot, kind, p, d in regions:
@@ -353,15 +372,135 @@ def aip_record(points, regions):
     return out
 
 
+def rail_record(points, track, rid, bulge=150.0):
+    """A rail through `points` (cm): one cubic segment per pair, bowed sideways by `bulge`."""
+    import math
+    n = len(points) - 1
+    out = bytearray(48 + 144 * n)
+    struct.pack_into('<I', out, 0, (rid << 8) | track)
+    struct.pack_into('<IIIiI', out, 0x1C, 0, n, 0x412D0000, -1, 0)
+    dist = 0.0
+    allpts = []
+    for k, (a, b) in enumerate(zip(points, points[1:])):
+        base = 48 + 144 * k
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        h = math.hypot(dx, dy)
+        side = (dy / h * bulge, -dx / h * bulge, 0.0)
+        # p(t) = a + (b - a) t + 4 side t (1 - t)
+        rows = [(0.0, 0.0, 0.0), tuple(-4 * v for v in side), tuple(b[i] - a[i] + 4 * side[i] for i in range(3)), a]
+        for r, row in enumerate(rows):
+            struct.pack_into('<4f', out, base + 0x10 + 16 * r, *row, 1.0 if r == 3 else 0.0)
+        pts = [tuple(rows[1][i] * t * t + rows[2][i] * t + rows[3][i] for i in range(3))
+               for t in (j / 64 for j in range(65))]
+        length = sum(math.dist(p, q) for p, q in zip(pts, pts[1:]))
+        allpts += pts
+        struct.pack_into('<f', out, base + 0x0C, length)
+        struct.pack_into('<3i', out, base + 0x60, k - 1 if k else -1, k + 1 if k < n - 1 else -1, rid)
+        struct.pack_into('<3f', out, base + 0x6C, *(min(p[i] for p in pts) - 30 for i in range(3)))
+        struct.pack_into('<3f', out, base + 0x78, *(max(p[i] for p in pts) + 30 for i in range(3)))
+        struct.pack_into('<f', out, base + 0x84, dist)
+        struct.pack_into('<I', out, base + 0x8C, 15)
+        dist += length
+    struct.pack_into('<3f', out, 4, *(min(p[i] for p in allpts) - 50 for i in range(3)))
+    struct.pack_into('<3f', out, 16, *(max(p[i] for p in allpts) + 50 for i in range(3)))
+    return record(8, track, rid, bytes(out))
+
+
+def particle_record(x, y, z, track, rid):
+    m = (1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1)
+    data = (bytes(16) + struct.pack('<16f', *m) + struct.pack('<4f', x, y, z + 100, 150)
+            + struct.pack('<II', (rid << 8) | track, (rid << 8) | track)
+            + struct.pack('<3f', x - 100, y - 100, z) + struct.pack('<3f', x + 100, y + 100, z + 200) + bytes(16))
+    return record(5, track, rid, data)
+
+
+def light_record(x, y, z, track, rid):
+    """A spot light (kind 6, 112 bytes) pointing along +y and down."""
+    data = bytearray(112)
+    struct.pack_into('<I3f', data, 16, 1, 1.0, 1.0, 800.0)
+    struct.pack_into('<3f', data, 32, 1.0, 0.9, 0.7)
+    struct.pack_into('<3f', data, 44, 0.0, 0.8, -0.6)
+    struct.pack_into('<3f', data, 56, x, y, z)
+    struct.pack_into('<3f3f', data, 68, x - 800, y - 800, z - 800, x + 800, y + 800, z + 800)
+    struct.pack_into('<2f', data, 92, 0.9, 0.7)
+    return record(6, track, rid, bytes(data))
+
+
+def glow_record(x, y, z, track, rid):
+    data = bytearray(80)
+    struct.pack_into('<I3f3f', data, 12, 1, 1.0, 1.0, 0.8, x, y, z)
+    struct.pack_into('<3f3f', data, 40, x - 50, y - 50, z - 50, x + 50, y + 50, z + 50)
+    return record(7, track, rid, bytes(data))
+
+
+def curtain_record(x0, x1, y, z, height_, track, rid):
+    """A vertical occluder quad across x0..x1 at y (kind 11, 208 bytes)."""
+    corners = [(x0, y, z), (x1, y, z), (x1, y, z + height_), (x0, y, z + height_)]
+    data = bytearray(208)
+    cx, cz = (x0 + x1) / 2, z + height_ / 2
+    import math
+    struct.pack_into('<4f', data, 0, cx, y, cz, math.dist((cx, y, cz), corners[0]))
+    for k, c in enumerate(corners):
+        struct.pack_into('<4f', data, 0x10 + 16 * k, *c, 1.0)
+    struct.pack_into('<4f', data, 0x50, 0.0, 1.0, 0.0, -y)
+    struct.pack_into('<3f3f', data, 0xA0, x0, y, z, x1, y, z + height_)
+    struct.pack_into('<I', data, 0xB8, 1)
+    return record(11, track, rid, bytes(data))
+
+
+def camera_record(volume_pos, look_point, bound_pos, track):
+    """Camera triggers (kind 17): one box volume whose enter action is a bounded camera on a point."""
+    out = struct.pack('<IfII', 7, 0.0, 1, 2)
+    out += struct.pack('<III', 1, 2, 1) + struct.pack('<3f3f3f', *volume_pos, 500, 500, 300, 0.25, 0, 0)
+    out += struct.pack('<I6fI3f', 1, 0.5, 400.0, 1.0, 100.0, 10.0, 0.0, 1, *look_point)
+    out += struct.pack('<I3f', 3, *bound_pos)
+    out += struct.pack('<I', 3)
+    out += b'\xef\xbe\xad\xde' * (-len(out) // 4 % 4)
+    return record(17, track, 0, out)
+
+
+def spine_record(points, markers):
+    """Progress meter (kind 21): a gate at each of `points` (cm) across the course, `markers` [(type, distance)]."""
+    import math
+    gates = []
+    dist = 0.0
+    for k, p in enumerate(points):
+        if k:
+            dist += math.hypot(p[0] - points[k - 1][0], p[1] - points[k - 1][1])
+        q = points[min(k + 1, len(points) - 1)] if k < len(points) - 1 else p
+        o = points[k - 1] if k == len(points) - 1 else p
+        dx, dy = q[0] - o[0], q[1] - o[1]
+        h = math.hypot(dx, dy) or 1.0
+        gates.append((dy / h, -dx / h, p[0], p[1], dist))
+    out = struct.pack('<4If', len(gates), 0x14, len(markers), 0x14 + 20 * len(gates), dist)
+    out += b''.join(struct.pack('<5f', *g) for g in gates)
+    out += b''.join(struct.pack('<If', *m) for m in markers)
+    return record(21, 0, 0, out)
+
+
 def build_course_world():
     """AAA: 6 x 10 patches (30 m x 50 m) with a path down the middle; A_AAA continues below it."""
     xs = 15 * PATCH_M / 5
     line = [(xs, y, height(xs, y)) for y in (100.0, 1500.0, 3000.0, 4900.0)]
     regions = [(0, 0, line[0], (0.0, 1.0, 0.0)), (1, 1, (xs, 2500.0, height(xs, 2500.0)), (0.0, 1.0, 0.0))]
+    ai_line = [(xs - 300.0, y, height(xs - 300.0, y) + 20) for y in (100.0, 1000.0, 2000.0, 3000.0, 4000.0, 4900.0)]
+    events = [(18, 0, 2400.0, 2450.0), (0, 0, 4500.0, 4550.0)]
+    rail = [(2200.0, y, height(2200.0, y) + 60) for y in (1000.0, 2000.0, 3000.0, 4000.0)]
+    spine = [(xs, y, 0.0) for y in (100.0, 800.0, 1500.0, 2200.0, 3000.0, 3800.0, 4900.0)]
     main = (record(0, 0, 0, struct.pack('<h', 7) + bytes(18)) + record(2, 0, 5, mdr_model())
             + terrain_grid(0.0, 0.0, 6, 10, 0, corner_order=((0, 0), (0, 1), (1, 0), (1, 1)))
             + placed_instance(1500.0, 2500.0, 0, 1) + placed_instance(200.0, 300.0, 0, 2)
-            + record(14, 0, 0, aip_record(line, regions)) + record(14, 0, 1, b'')
+            + particle_record(1300.0, 2600.0, height(1300.0, 2600.0), 0, 3)
+            + light_record(1700.0, 2400.0, height(1700.0, 2400.0) + 600, 0, 0)
+            + glow_record(1600.0, 2300.0, height(1600.0, 2300.0) + 400, 0, 0)
+            + rail_record(rail, 0, 0)
+            + curtain_record(600.0, 2400.0, 2700.0, height(1500.0, 2700.0) - 200, 1500.0, 0, 0)
+            + camera_record((1500.0, 2500.0, height(1500.0, 2500.0)), (1500.0, 3000.0, 0.0),
+                            (1800.0, 2500.0, height(1800.0, 2500.0) + 300), 0)
+            + record(13, 0, 0, bytes(32))
+            + spine_record(spine, [(0, 0.0), (1, 2400.0), (2, 4400.0)])
+            + record(14, 0, 0, aip_record(line, regions, ai=[(ai_line, [(100, 1, 1000.0, 1200.0)])], events=events))
+            + record(14, 0, 1, b'')
             + record(15, 0, 0, painter_record([(0.5, 2.0, 3000.0, 10000.0, 0.7, 0.8, 1.0)])))
     connector = terrain_grid(0.0, 10 * PATCH_M, 6, 4, 1) + record(15, 1, 0, painter_record(
         [(0.5, 2.0, 3000.0, 8000.0, 0.6, 0.7, 0.9)]))

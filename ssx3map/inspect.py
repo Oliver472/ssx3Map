@@ -69,6 +69,7 @@ class Report:
         self.section('dry run: fog and texture edits (nothing is written)', self.dry_run)
         self.section('geometry: SDB sizes and counts (for adding new geometry)', self.geometry)
         self.section('courses: race lines, start, terrain dry run', self.courses)
+        self.section('course warp: record formats and a dry run', self.warp_formats)
         return self.data
 
     # ------------------------------------------------------------------------
@@ -569,3 +570,104 @@ class Report:
             self.out(f'  re-encoded and verified: {collections.Counter(x["method"] for x in report)}')
         except Exception as e:      # noqa: BLE001
             self.out(f'  terrain dry run failed: {type(e).__name__}: {e}')
+
+    def warp_formats(self, codes=('ARA1', 'BRA2', 'ABA1'), probe_code='ARA1', along=1000.0, metres=10.0):
+        """Check the layouts the warp tool rewrites (taken from other projects) on this disc."""
+        from . import aip as aipmod
+        from . import warp
+        w = self.w
+        for code in codes:
+            try:
+                locs = mapedit.course_locations(w, code)
+            except KeyError:
+                continue
+            counts = collections.Counter()
+            notes = collections.defaultdict(list)
+            for loc in locs:
+                c = mapedit.main_chunk(loc)
+                data = w.stream.current(c)
+                for rec in w.stream.records(c):
+                    body = data[rec.offset:rec.offset + rec.size]
+                    counts[rec.kind] += 1
+                    if rec.kind == 8 and rec.size >= 48 and not (rec.size - 48) % 144:
+                        n = (rec.size - 48) // 144
+                        prev_end = None
+                        for k in range(n):
+                            base = 48 + 144 * k
+                            rows = [struct.unpack_from('<3f', body, base + 0x10 + 16 * r) for r in range(4)]
+                            length, = struct.unpack_from('<f', body, base + 0x0C)
+                            dist, = struct.unpack_from('<f', body, base + 0x84)
+                            arc = warp._arc(rows)
+                            notes['rail arc/length'].append(arc / length if length else 0.0)
+                            if prev_end is not None:
+                                notes['rail chain gap cm'].append(math.dist(prev_end[0], rows[3]))
+                                notes['rail distance error cm'].append(abs(prev_end[1] - dist))
+                            prev_end = (warp._cubic(rows, 1.0), dist + length)
+                            notes['rail row50 nonzero'].append(any(struct.unpack_from('<4f', body, base + 0x50)))
+                            notes['rail flags'].append(struct.unpack_from('<I', body, base + 0x8C)[0])
+                    elif rec.kind == 14 and rec.size and rec.rid == 0:
+                        try:
+                            a = aipmod.decode(body)
+                        except aipmod.AipError as e:
+                            notes['aip errors'].append(str(e))
+                            continue
+                        for p in a.ai_paths + a.track_paths:
+                            for sg in p.segments:
+                                notes['aip |dir xy| - 1'].append(abs(math.hypot(sg[0], sg[1]) - 1.0))
+                        for p in a.track_paths:
+                            self.out(f'  {code} track {p.index}: remaining {p.header[3] / 100:.1f} m, length '
+                                     f'{p.length / 100:.1f} m, events {[(e[0], e[1], round(e[2]), round(e[3])) for e in p.events]}')
+                        ev = collections.Counter(e[0] for p in a.ai_paths for e in p.events)
+                        self.out(f'  {code} AI path event types {dict(ev.most_common(12))}, AI header words '
+                                 f'{[p.header for p in a.ai_paths[:2]]}')
+                    elif rec.kind == 21 and rec.size >= 0x14:
+                        n, seg_off, m, mark_off = struct.unpack_from('<4I', body, 0)
+                        total, = struct.unpack_from('<f', body, 0x10)
+                        gates = [struct.unpack_from('<5f', body, seg_off + 20 * k) for k in range(n)]
+                        marks = [struct.unpack_from('<If', body, mark_off + 8 * k) for k in range(m)]
+                        mono = all(b[4] >= a[4] for a, b in zip(gates, gates[1:]))
+                        axis = max((abs(math.hypot(g[0], g[1]) - 1) for g in gates), default=0)
+                        step = [math.hypot(b[2] - a[2], b[3] - a[3]) - (b[4] - a[4]) for a, b in zip(gates, gates[1:])]
+                        self.out(f'  {code} progress meter: {n} gates, {m} markers {[(t, round(d)) for t, d in marks]}, '
+                                 f'total {total / 100:.1f} m, distances rising {mono}, |axis|-1 max {axis:.4f}, '
+                                 f'gate spacing minus distance step: {_dist([round(v) for v in step])}')
+                    elif rec.kind == 11 and rec.size >= 0xB8:
+                        n4 = struct.unpack_from('<4f', body, 0x50)
+                        for k in range(4):
+                            cc = struct.unpack_from('<3f', body, 0x10 + 16 * k)
+                            notes['curtain plane error cm'].append(abs(sum(n4[i] * cc[i] for i in range(3)) + n4[3]))
+                    elif rec.kind == 17 and rec.size:
+                        parsed = warp.camera_trigger_fields(body)
+                        notes['camera triggers parsed'].append(parsed is not None)
+                        if parsed:
+                            notes['camera positions'].append(len(parsed[0]))
+                    elif rec.kind in (5, 6, 7):
+                        notes[f'kind {rec.kind} sizes'].append(rec.size)
+            self.out(f'  {code}: records {dict(sorted(counts.items()))}')
+            for key, values in sorted(notes.items()):
+                if values and isinstance(values[0], float):
+                    vals = sorted(values)
+                    self.out(f'    {key}: n={len(vals)} min={vals[0]:.4f} median={vals[len(vals) // 2]:.4f} '
+                             f'max={vals[-1]:.4f}')
+                else:
+                    self.out(f'    {key}: {_dist(values) if values and isinstance(values[0], int) else values[:6]}')
+        # Dry run: move a piece of the course to the right, then re-encode in memory.
+        try:
+            from .world import World
+            probe = World.__new__(World)
+            probe.__dict__.update(w.__dict__)
+            probe.stream = ssb.WorldStream(w.stream.original)
+            pl = mapedit.place(probe, probe_code, along=along)
+            f = pl.frame
+            cm = metres * 100
+            grab = warp.Grab((f.x, f.y), (cm * f.rx, cm * f.ry, 0.0), 2 * cm, 4 * cm)
+            t = time.time()
+            rep = warp.warp_edit(probe, probe_code, grab)
+            self.out(f'  {probe_code} warp {metres:.0f} m right at {along:.0f} m ({time.time() - t:.1f}s): {rep}')
+            line = aipmod.course_line(mapedit.course_aip(probe, probe_code))
+            self.out(f'  line after: parts {line.parts}, {line.length / 100:.1f} m')
+            image, report = probe.stream.build()
+            probe.stream.verify(image)
+            self.out(f'  re-encoded and verified: {collections.Counter(x["method"] for x in report)}')
+        except Exception as e:      # noqa: BLE001
+            self.out(f'  warp dry run failed: {type(e).__name__}: {e}')

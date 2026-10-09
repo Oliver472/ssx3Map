@@ -39,7 +39,7 @@ button.active { background: #7a5d10; border-color: #c9a227; }
 .muted { color: var(--muted); }
 #log { font-size: 12px; max-height: 220px; overflow-y: auto; }
 #log div { padding: 3px 0; border-bottom: 1px dashed var(--line); }
-#log .err { color: #ff8a80; }
+#log .err, #warpInfo.err { color: #ff8a80; }
 #log .ok { color: #a5d6a7; }
 #tip { position: absolute; pointer-events: none; background: rgba(10, 14, 18, .88); color: var(--text);
   border: 1px solid var(--line); border-radius: 4px; padding: 4px 7px; font-size: 12px; z-index: 3;

@@ -56,7 +56,7 @@ nedalo.
 ## 2. Prvá úprava: červená hmla na Snow Jam
 
 ```
-python -m ssx3map fog "SSX 3 (USA).iso" --location ARA1 --location A_ARA1 --location ARA1_B ^
+python -m ssx3map fog "SSX 3 (USA).iso" --location ARA1 --location A_ARA1 --location ARA1_B \
     --color 1 0.2 0.2 --near 1000 --far 8000 -o "SSX3_hmla.iso"
 ```
 
@@ -129,6 +129,14 @@ three.js sa sťahuje z CDN. Herné dáta ostávajú u teba, editor beží iba lo
   Pod myšou sa ukáže obrys oblasti, ktorú úprava zasiahne, a klik ju
   vykoná. Skok sa natočí po smere trate, smer sa dá doladiť poľom
   „otočenie“. Rozmery sa nastavia podľa terénu, alebo ich zadáš ručne.
+- **Posun:** chyť terén ľavým tlačidlom a potiahni ho nabok. Takto sa dá
+  ohnúť alebo presunúť kus trate. Vnútri žltého kruhu (polomer) sa všetko
+  posunie ako celok: terén, objekty, zábradlia, AI trasy, štart a reset
+  body, svetlá, kamerové spúšťače aj ukazovateľ postupu. Smerom k oranžovému
+  kruhu (okraj) posun doznieva a terén sa tam natiahne alebo stlačí. Počas
+  ťahania editor ukazuje, ako veľmi sa okraj stlačí. Posun, pri ktorom by sa
+  terén prekryl sám cez seba, odmietne. Otočenie a zdvih sa pridajú k posunu,
+  bez ťahania stačí kliknúť.
 - **Objekty:** klikni na objekt (strom, budovu…) a ťahaj šípky,
   prípadne použi tlačidlá ↑/↓, otočenie o 15° (aj kláves R) alebo
   Odstrániť (aj kláves Delete). **Premiestniť klikom** (kláves P) presunie
@@ -187,7 +195,7 @@ Tvary:
 
 ```
 # 3 m skok, 250 m od štartu Snow Jamu (rozmery podľa terénu)
-python3 -m ssx3map terrain "SSX 3 (USA).iso" --location ARA1 --along 250 ^
+python3 -m ssx3map terrain "SSX 3 (USA).iso" --location ARA1 --along 250 \
     --shape kicker --height 3 -o SSX3_skok.iso
 ```
 
@@ -206,6 +214,32 @@ python3 -m ssx3map objects "SSX 3 (USA).iso" --location ARA1 --along 400 --radiu
 
 Herné pomocné objekty (štart, triggery, resety, ploty režimov) sa bez
 `--force` nemenia.
+
+**Posun kusu trate.** Príkaz `warp` vezme kus trate a posunie ho nabok,
+dopredu, hore alebo ho otočí. Miesto sa zadáva rovnako ako pri teréne.
+Všetko v polomere `--radius` sa posunie ako celok. Na šírke `--edge` posun
+doznieva a terén sa tam natiahne alebo stlačí.
+
+```
+# 250 m od štartu Snow Jamu posuň 40 m trate o 12 m doprava
+python3 -m ssx3map warp "SSX 3 (USA).iso" --location ARA1 --along 250 \
+    --right 12 --radius 20 -o SSX3_posun.iso
+```
+
+Spolu s terénom sa posunú:
+- objekty a ich kolízia, častice, svetlá a ich žiara,
+- zábradlia: každý úsek sa ohne, dĺžky sa prepočítajú,
+- AI a pretekové trasy: body, udalosti (checkpointy, cieľ) a vzdialenosť do
+  cieľa,
+- štartová mriežka a reset body aj so smerom,
+- kamerové spúšťače, zásteny viditeľnosti a ukazovateľ postupu na trati.
+
+Dĺžka trate sa zmení a nástroj vypíše o koľko. Okraj musí byť dosť široký.
+Ak by posun stlačil terén na menej ako 35 %, nástroj ho bez `--force`
+odmietne, a posun, pri ktorom by sa terén prekryl, neurobí vôbec.
+Predvolený okraj je 2,5× dĺžka posunu (aspoň 40 m). Zvukové spúšťače
+a skripty scén nevieme čítať, takže ostanú na pôvodnom mieste. Nástroj ich
+vypíše.
 
 Na jedno ISO sa dá spraviť viac úprav za sebou: výstup jedného príkazu
 použi ako vstup ďalšieho.
@@ -241,8 +275,12 @@ Spojky sa volajú podľa lokácií, ktoré spájajú (napr. `A_ARA1`). Oblohy s�
 
 - Zmena veľkosti záznamov: nové objekty, iný počet trojuholníkov a podobne.
   Na to treba pochopiť a prepisovať `bam.sdb`.
-- Posúvanie AI trás spolu s terénom. AI jazdci jazdia po teréne, ich trasa sa
-  však nemení.
+- Pri zdvihnutí alebo znížení terénu (štetec, tvary) sa výška AI trás
+  nemení. Jazdci jazdia po teréne, takže to nevadí. Pri posune trate
+  (`warp`) sa AI trasy posúvajú.
+- Posun neprepisuje ohraničenie chunkov v `bam.sdb`. Kus trate preto posúvaj
+  v rámci trate, nie ďaleko za jej okraj.
+- Zvukové spúšťače a skripty scén sa pri posune trate nehýbu.
 - Osvetlenie terénu je zapečené v textúrach, takže nový kopec nemá
   vlastné tiene.
 - Import vlastného PNG do textúry. Hotový je export a prefarbenie.

@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 import time
 
 from . import aip as aipmod
-from . import instances, mapedit, painter, terrain, texture
+from . import instances, mapedit, painter, terrain, texture, warp
 from .world import KIND_NAMES, World, resolve_input
 
 
@@ -249,6 +250,39 @@ def cmd_terrain(args):
     _save(args, w)
 
 
+def cmd_warp(args):
+    w = _open(args.input)
+    _check_output(args, w)
+    if not args.output:
+        raise SystemExit('give -o OUTPUT')
+    pl = _placement(w, args)
+    print('miesto: ' + _describe(pl))
+    f = pl.frame
+    right, ahead = args.right * 100, args.ahead * 100
+    move = (right * f.rx + ahead * f.fx, right * f.ry + ahead * f.fy, args.lift * 100)
+    shift = math.hypot(move[0], move[1])
+    edge = args.edge if args.edge else max(40.0, 2.5 * shift / 100)
+    grab = warp.Grab((f.x, f.y), move, args.radius * 100, edge * 100, turn=args.turn)
+    try:
+        report = warp.warp_edit(w, args.location, grab, force=args.force)
+    except mapedit.EditRefused as e:
+        raise SystemExit(f'{e}; nothing written')
+    print(f'posun: {args.right:+.1f} m doprava, {args.ahead:+.1f} m dopredu, zdvih {args.lift:+.1f} m, otočenie '
+          f'{args.turn:+.0f}°; plne v polomere {args.radius:.0f} m, doznieva na {edge:.0f} m '
+          f'(terén najviac stlačený na {report.stretch:.0%})')
+    print(f'terén: {report.patches} plátov, odchýlka do {report.shape_error / 100:.2f} m; objekty {report.objects}, '
+          f'častice {report.particles}, svetlá {report.lights}, zábradlia {report.rails} (odchýlka '
+          f'{report.rail_error / 100:.2f} m), AI/pretekové trasy {report.paths} (udalosti {report.events}), '
+          f'štart/reset body {report.points}, kamery {report.cameras}, zásteny viditeľnosti {report.curtains}, '
+          f'ukazovateľ postupu {report.gates} brán; trať {report.length_change / 100:+.1f} m')
+    if report.objects_bent:
+        print(f'POZOR: {len(report.objects_bent)} objektov presahuje okraj posunu a posunulo sa celých: '
+              + ', '.join(report.objects_bent[:8]), file=sys.stderr)
+    if report.untouched:
+        print('neposunuté (formát nepoznáme): ' + ', '.join(report.untouched), file=sys.stderr)
+    _save(args, w)
+
+
 def cmd_objects(args):
     w = _open(args.input)
     _check_output(args, w)
@@ -363,6 +397,20 @@ def main(argv=None):
     sp.add_argument('--edge', type=float, help='blend width at the borders, metres')
     sp.add_argument('--no-carry', action='store_true', help='do not move objects and start/reset points along')
     sp.add_argument('--force', action='store_true')
+    sp.add_argument('-o', '--output', help='output .iso or .BIG')
+    sp.add_argument('-v', '--verbose', action='store_true')
+
+    sp = add('warp', cmd_warp, 'move a piece of the course sideways with everything on it (objects, rails, '
+                               'AI paths, start/reset points, lights, cameras, progress meter)')
+    placement_args(sp)
+    sp.add_argument('--right', type=float, default=0.0, help='metres to the right of the course (negative: left)')
+    sp.add_argument('--ahead', type=float, default=0.0, help='metres forward along the course')
+    sp.add_argument('--lift', type=float, default=0.0, help='metres up (negative: down)')
+    sp.add_argument('--turn', type=float, default=0.0, help='degrees, counter-clockwise seen from above')
+    sp.add_argument('--radius', type=float, default=30.0, help='metres moved as a whole (default 30)')
+    sp.add_argument('--edge', type=float, help='metres over which the move fades out (default 2.5 x the move, '
+                                               'at least 40)')
+    sp.add_argument('--force', action='store_true', help='allow squeezing the edge below 35 %%')
     sp.add_argument('-o', '--output', help='output .iso or .BIG')
     sp.add_argument('-v', '--verbose', action='store_true')
 

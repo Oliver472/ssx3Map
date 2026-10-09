@@ -478,27 +478,5 @@ def rotate_object(world, chunk, offset, degrees):
     The box is rebuilt from the box on the disc, turned by the total yaw since
     then, so repeated turns do not make it grow."""
     buf = world.stream.chunk(chunk)
-    instances.rotate_z(buf, offset, degrees)
-    orig = world.stream.chunk_original(chunk)[offset:offset + 0x90]
-    om = struct.unpack_from('<16f', orig, instances.MATRIX)
-    nm = struct.unpack_from('<16f', buf, offset + instances.MATRIX)
-    row = 0 if math.hypot(om[0], om[1]) > 1e-3 else 1
-    yaw = math.atan2(nm[4 * row + 1], nm[4 * row]) - math.atan2(om[4 * row + 1], om[4 * row])
-    c, s_ = math.cos(yaw), math.sin(yaw)
-    ot = om[12:15]
-    nt = nm[12:15]
-
-    def place(x, y):
-        dx, dy = x - ot[0], y - ot[1]
-        return nt[0] + dx * c - dy * s_, nt[1] + dx * s_ + dy * c
-
-    lo = struct.unpack_from('<3f', orig, instances.BBOX_MIN)
-    hi = struct.unpack_from('<3f', orig, instances.BBOX_MAX)
-    corners = [place(x, y) for x in (lo[0], hi[0]) for y in (lo[1], hi[1])]
-    dz = nt[2] - ot[2]
-    struct.pack_into('<3f', buf, offset + instances.BBOX_MIN, min(p[0] for p in corners),
-                     min(p[1] for p in corners), lo[2] + dz)
-    struct.pack_into('<3f', buf, offset + instances.BBOX_MAX, max(p[0] for p in corners),
-                     max(p[1] for p in corners), hi[2] + dz)
-    sx, sy, sz = struct.unpack_from('<3f', orig, instances.SPHERE)
-    struct.pack_into('<3f', buf, offset + instances.SPHERE, *place(sx, sy), sz + dz)
+    instances.turn_and_move(buf, offset, math.radians(degrees), (0.0, 0.0, 0.0))
+    instances.rebuild_bounds(buf, offset, world.stream.chunk_original(chunk)[offset:offset + 0x90])

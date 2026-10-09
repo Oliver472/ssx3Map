@@ -46,6 +46,7 @@
       <button data-tool="view" class="tab active">Pozerať</button>
       <button data-tool="brush" class="tab">Štetec</button>
       <button data-tool="terrain" class="tab">Tvary</button>
+      <button data-tool="warp" class="tab">Posun</button>
       <button data-tool="objects" class="tab">Objekty</button>
     </div>
 
@@ -96,6 +97,21 @@
       </div>
       <label class="check"><input type="checkbox" id="forceTerrain"> vynútiť (aj nepresný tvar)</label>
       <p class="muted">Klikni do terénu. Obrys ukazuje, kam úprava siahne; skok sa natočí po smere trate.</p>
+    </div>
+
+    <div id="tool-warp" class="tool hidden">
+      <p class="muted">Chyť terén ľavým tlačidlom a potiahni ho nabok. Vnútri žltého kruhu sa posunie všetko ako
+        celok – terén, objekty, zábradlia, AI trasy, štart a reset body, svetlá aj kamery; po oranžový kruh
+        posun doznieva a terén sa tam natiahne alebo stlačí.</p>
+      <div class="grid2">
+        <label>polomer (m) <input type="number" id="warpRadius" value="30" min="0" step="5"></label>
+        <label>okraj (m) <input type="number" id="warpEdge" min="10" step="5" placeholder="auto"></label>
+        <label>otočenie ° <input type="number" id="warpTurn" value="0" step="5"></label>
+        <label>zdvih (m) <input type="number" id="warpLift" value="0" step="1"></label>
+      </div>
+      <label class="check"><input type="checkbox" id="forceWarp"> vynútiť (silnejšie stlačenie okraja)</label>
+      <p class="muted" id="warpInfo">Prázdny okraj = 2,5× dĺžka posunu (aspoň 40 m). Kameru otáčaš pravým
+        tlačidlom, posúvaš stredným. S otočením alebo zdvihom stačí kliknúť.</p>
     </div>
 
     <div id="tool-objects" class="tool hidden">

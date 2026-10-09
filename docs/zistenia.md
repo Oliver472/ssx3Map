@@ -61,3 +61,38 @@ u16 × 13 počty záznamov druhov 0..12, …, 7 × u32 nuly`. Overené na 159/15
 - Trať je rozdelená na viac track trás (úsekov). Najdlhší úsek Snow Jamu má 882 m, celá
   trať je ich reťaz. Segment = (smer xyz, dĺžka): polyline sedí v bounds pri všetkých tratiach.
 - Štart Snow Jamu: (-1318.8, 138.6, -2287.7) m, rovnaké ako v ssx-web.
+
+# Formáty pre posun trate (`warp`)
+
+Rozloženia záznamov, ktoré posun prepisuje. Zdroje: ssx-web (RAIL_RECOVERY.md,
+RACE_EVENT_RECOVERY.md, export_progress_meter.py, export_local_lights.py,
+export_light_glow.py, export_camera_triggers.py, export_course_initial.py)
+a SSX-Library (WorldParticleInstance, WorldVisCurtain). Na disku overené
+v týchto projektoch, u nás zatiaľ len na syntetických dátach.
+
+- **Zábradlie (druh 8):** hlavička 48 B (`+0x04`/`+0x10` bbox, `+0x20` počet
+  úsekov), úsek 144 B: `+0x0C` dĺžka oblúka, `+0x10..+0x4F` riadky pre t³, t², t, 1
+  (`+0x40` = začiatok, w = 1), `+0x50` malé hodnoty (hra ich nečíta),
+  `+0x60/+0x64` predošlý/ďalší úsek, `+0x68` rid, `+0x6C/+0x78` bbox,
+  `+0x84` vzdialenosť od začiatku zábradlia (= predošlá + dĺžka), `+0x8C` = 15.
+- **AIP (druh 14):** segment je (vodorovný smer x, y, stúpanie na cm, vodorovná
+  dĺžka), udalosti (`typ, hodnota, začiatok, koniec`) sú vodorovné vzdialenosti
+  od začiatku trasy. Float v hlavičke pretekovej trasy je zostávajúca
+  vzdialenosť do cieľa na jej začiatku. Typ 18 = checkpoint, 0 = cieľ.
+- **Ukazovateľ postupu (druh 21):** `u32 N, u32 offset brán, u32 M, u32 offset
+  značiek, f32 celková dĺžka`; brána 20 B = os naprieč (x, y), stred (x, y),
+  vzdialenosť od štartu; značka 8 B = typ (0 štart, 1 checkpoint, 2 cieľ), vzdialenosť.
+- **Lokálne svetlo (druh 6, 112 B):** `+56` poloha, `+44` os kužeľa, `+68/+80` bbox.
+- **Žiara svetla (druh 7, 80 B):** `+28` poloha, `+40/+52` bbox.
+- **Častica (druh 5, 144 B):** matica `+0x10` (posun `+0x40`), guľa `+0x50`,
+  bbox `+0x68/+0x74`.
+- **Zástena viditeľnosti (druh 11, 208 B):** guľa `+0`, štyri rohy `+0x10..+0x40`,
+  rovina `+0x50` (normála, d), bbox `+0xA0/+0xAC`.
+- **Kamerové spúšťače (druh 17):** verzia 7, spúšťače s objemom (poloha,
+  mierka, otočenie Z/X/Y) a dvomi akciami (prepnutie, ohraničená kamera
+  s bodom pohľadu a hraničným objektom, spline, nič).
+
+Posun počíta zmenu dĺžky trate po reťazi pretekových trás. O tú sa posunú
+vzdialenosti za ohybom (udalosti, zostávajúca vzdialenosť, brány a značky
+ukazovateľa postupu). Hra by tak mala cieľ, checkpointy aj poradie jazdcov
+počítať správne. Overiť to treba v PCSX2.

@@ -9,6 +9,7 @@ The server only listens on 127.0.0.1.
 from __future__ import annotations
 
 import json
+import math
 import mimetypes
 import os
 import struct
@@ -19,7 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from .. import aip as aipmod
-from .. import mapedit, models, painter, ssb, terrain, texture
+from .. import mapedit, models, painter, ssb, terrain, texture, warp
 
 STATIC = os.path.join(os.path.dirname(__file__), 'static')
 UNDO_LIMIT = 25
@@ -271,6 +272,41 @@ class Session:
                                  f'odchýlka {report.shape_error / 100:.2f} m, objekty {report.objects}, '
                                  f'zábradlia {report.rails}, štart/reset body {report.points}'))
 
+    def warp(self, req):
+        """Grab the ground at (x, y) and carry it to (tx, ty) (cm), lifted by `lift` and turned by `turn`."""
+        w = self.world
+        code = req['code']
+        with self.lock:
+            x, y = float(req['x']), float(req['y'])
+            move = (float(req['tx']) - x, float(req['ty']) - y, float(req.get('lift') or 0) * 100)
+            grab = warp.Grab((x, y), move, float(req['radius']) * 100, float(req['edge']) * 100,
+                             turn=float(req.get('turn') or 0))
+            snap = w.stream.snapshot(mapedit.course_chunks(w, code))
+            report = warp.warp_edit(w, code, grab, force=bool(req.get('force')))
+            label = (f'posun {math.hypot(move[0], move[1]) / 100:.1f} m'
+                     + (f', zdvih {move[2] / 100:+.1f} m' if move[2] else '')
+                     + (f', otočenie {float(req.get("turn") or 0):+.0f}°' if req.get('turn') else '')
+                     + f' @ ({x / 100:.0f}, {y / 100:.0f})')
+            self._push(label, snap)
+            parts = [f'{report.patches} plátov (odchýlka {report.shape_error / 100:.2f} m)',
+                     f'objekty {report.objects}', f'zábradlia {report.rails}', f'AI trasy {report.paths}',
+                     f'štart/reset body {report.points}', f'svetlá {report.lights}',
+                     f'kamery {report.cameras}', f'ukazovateľ postupu {report.gates}',
+                     f'trať {report.length_change / 100:+.1f} m']
+            notes = []
+            if report.stretch < 0.6:
+                notes.append(f'okraj stlačený na {report.stretch:.0%}')
+            if report.objects_bent:
+                notes.append(f'{len(report.objects_bent)} veľkých objektov sa posunulo celých')
+            if report.objects_skipped:
+                notes.append(f'{len(report.objects_skipped)} obrovských objektov ostalo')
+            if report.untouched:
+                notes.append('neposunuté: ' + ', '.join(report.untouched))
+            return dict(message=f'{label}: ' + ', '.join(parts) + (' · ' + '; '.join(notes) if notes else ''),
+                        report=dict(patches=report.patches, objects=report.objects, rails=report.rails,
+                                    paths=report.paths, points=report.points, stretch=round(report.stretch, 3),
+                                    length_change=round(report.length_change, 1), untouched=report.untouched))
+
     def objects(self, req):
         w = self.world
         with self.lock:
@@ -390,6 +426,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(400, dict(error='bad JSON'))
         s = self.session
         routes = {'/api/terrain': lambda: s.terrain(req), '/api/stroke': lambda: s.stroke(req),
+                  '/api/warp': lambda: s.warp(req),
                   '/api/objects': lambda: s.objects(req),
                   '/api/undo': s.undo_last, '/api/save': lambda: s.save(req['output'])}
         if url.path not in routes:

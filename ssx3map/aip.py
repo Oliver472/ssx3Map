@@ -11,8 +11,12 @@ Layout after ssx-web's tools/race_event_assets.py (GPL-3.0):
     u32 n; n x region {u32 slot, u32 kind, 3f position, 3f direction, u32 node, u32 path}
 
 Region kind 0 = start grid (slot 0 is the human), kind 1 = session/reset points.
-A segment is (dx, dy, dz, length): a unit direction and a length in cm (checked
-against each path's bounds, see `Path.points`).
+A segment is (dx, dy, slope, w): the horizontal unit direction, the height change
+per horizontal cm and the horizontal length w in cm (ssx-web, RACE_EVENT_RECOVERY:
+the runtime path bank holds these floats verbatim), so a step moves by
+(dx * w, dy * w, slope * w). Event start/end are horizontal distances from the
+path origin. A track path's float header field is the remaining race distance at
+its origin (ssx-web export_course_initial.py).
 """
 from __future__ import annotations
 
@@ -35,6 +39,13 @@ class Path:
     segments: list
     header: tuple
     offset: int = 0
+    body: int = 0               # byte offset of `position` inside the record
+    events: list = field(default_factory=list)      # [(type, value, start, end)]
+
+    @property
+    def remaining_offset(self):
+        """Byte offset of a track path's remaining distance (header float), or None."""
+        return self.offset + 12 if self.kind == 'track' else None
 
     def points(self):
         """Polyline (cm). Segments are direction*length steps from `position`."""
@@ -112,20 +123,20 @@ def decode(data):
         offset = pos
         header = read('7I')
         points, events = count(), count()
+        body = pos
         position, low, high = read('3f'), read('3f'), read('3f')
         segments = [read('4f') for _ in range(points)]
-        for _ in range(events):
-            read('IIff')
-        aip.ai_paths.append(Path(index, 'ai', position, low, high, segments, header, offset))
+        evs = [read('IIff') for _ in range(events)]
+        aip.ai_paths.append(Path(index, 'ai', position, low, high, segments, header, offset, body, evs))
     for index in range(count()):
         offset = pos
         header = read('IIIf')
         points, events = count(), count()
+        body = pos
         position, low, high = read('3f'), read('3f'), read('3f')
         segments = [read('4f') for _ in range(points)]
-        for _ in range(events):
-            read('IIff')
-        aip.track_paths.append(Path(index, 'track', position, low, high, segments, header, offset))
+        evs = [read('IIff') for _ in range(events)]
+        aip.track_paths.append(Path(index, 'track', position, low, high, segments, header, offset, body, evs))
     aip.links = [read('II') for _ in range(count())]
     for _ in range(count()):
         start = pos

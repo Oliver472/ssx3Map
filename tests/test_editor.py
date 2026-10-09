@@ -122,6 +122,31 @@ class EditorApiTest(unittest.TestCase):
         self.assertEqual(status, 400)           # never overwrite the input
 
 
+    def test_warp(self):
+        _, course = self.call('/api/course?code=AAA')
+        session = next(r for r in course['regions'] if r['kind'] == 1)
+        obj = next(o for o in course['objects'] if o['n'].endswith('#1'))
+        rail = course['rails'][0]['pts']
+        status, res = self.call('/api/warp', dict(code='AAA', x=1500, y=2500, tx=1800, ty=2500, radius=5, edge=15))
+        self.assertEqual(status, 200, res)
+        self.assertIn('AI trasy 2', res['message'])
+        self.assertIn('zvukové spúšťače', res['message'])
+        _, moved = self.call('/api/course?code=AAA')
+        self.assertAlmostEqual(next(r for r in moved['regions'] if r['kind'] == 1)['p'][0] - session['p'][0], 300, 1)
+        self.assertAlmostEqual(next(o for o in moved['objects'] if o['k'] == obj['k'])['lo'][0] - obj['lo'][0], 300, 1)
+        self.assertNotEqual(moved['rails'][0]['pts'], rail)
+        self.assertGreater(moved['line']['length'], course['line']['length'])
+        # Too far for the edge: refused, nothing changes.
+        status, res = self.call('/api/warp', dict(code='AAA', x=1500, y=2500, tx=3500, ty=2500, radius=5, edge=10))
+        self.assertEqual(status, 400)
+        self.assertIn('fold', res['error'])
+        status, res = self.call('/api/undo', {})
+        self.assertEqual(status, 200)
+        _, back = self.call('/api/course?code=AAA')
+        self.assertEqual(back['rails'][0]['pts'], rail)
+        self.assertEqual(back['regions'], course['regions'])
+
+
 def Patch_c(flat):
     return [[tuple(flat[(j * 4 + i) * 3:(j * 4 + i) * 3 + 3]) for i in range(4)] for j in range(4)]
 

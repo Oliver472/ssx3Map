@@ -72,6 +72,38 @@ await page.click('#undo');
 await page.waitForFunction(() => /späť/.test(document.querySelector('#log').innerText), null, { timeout: 30000 });
 check(/späť/.test(await logText()), 'undo');
 
+// Move a piece of the course: grab the line at 24 m and drag it 3 m to the side (left button grabs).
+await page.click('button[data-tool=warp]');
+await page.fill('#warpRadius', '5');
+await page.fill('#warpEdge', '15');
+const aside = await page.evaluate(() => {
+  const s = window.ssxEditor.state;
+  const { p, h } = s.line.at(2400);
+  const o = s.origin;
+  const at = (x, y, z) => {
+    const v = window.ssxEditor.project((x - o[0]) / 100, (z - o[2]) / 100, -(y - o[1]) / 100);
+    const r = document.querySelector('#view').getBoundingClientRect();
+    return { x: r.left + (v.x + 1) / 2 * r.width, y: r.top + (1 - v.y) / 2 * r.height };
+  };
+  const right = [h[1], -h[0]];
+  return { from: at(p[0], p[1], p[2]), to: at(p[0] + 300 * right[0], p[1] + 300 * right[1], p[2]),
+    regions: JSON.stringify(s.course.regions) };
+});
+await page.mouse.move(aside.from.x, aside.from.y);
+await page.mouse.down();
+for (let k = 1; k <= 8; k++) await page.mouse.move(aside.from.x + (aside.to.x - aside.from.x) * k / 8, aside.from.y + (aside.to.y - aside.from.y) * k / 8, { steps: 2 });
+const info = await page.$eval('#warpInfo', (e) => e.innerText);
+check(/posun \d/.test(info), `warp preview: ${info}`);
+await page.screenshot({ path: path.join(out, 'editor-2b-warp-drag.png') });
+await page.mouse.up();
+await page.waitForFunction(() => /posun \d+(\.\d)? m @|fold|squeeze|nothing|refused|off the/.test(document.querySelector('#log').innerText), null, { timeout: 30000 });
+text = await logText();
+check(/posun [\d.]+ m @ .*AI trasy/.test(text), `warp applied: ${text.split('\n')[0]}`);
+const regionsAfter = await page.evaluate(() => JSON.stringify(window.ssxEditor.state.course.regions));
+check(regionsAfter !== aside.regions, 'reset point moved with the ground');
+await page.waitForTimeout(500);
+await page.screenshot({ path: path.join(out, 'editor-2c-warp.png') });
+
 // Objects: select the first visible object by projecting it to the screen, then raise it.
 await page.click('button[data-tool=objects]');
 const target = await page.evaluate(() => {

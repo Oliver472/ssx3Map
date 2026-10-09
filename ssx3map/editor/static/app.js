@@ -77,7 +77,7 @@ const state = {
   terrain: new THREE.Group(), objects: null, overlay: new THREE.Group(), brush: new THREE.Group(),
   tool: 'view', sel: null, index: null, line: null, textures: new Map(), framed: false,
   models: new THREE.Group(), sky: new THREE.Group(), packs: new Map(), selBox: null,
-  stroke: null, placing: false,
+  stroke: null, placing: false, grab: null,
 };
 scene.add(state.terrain, state.overlay, state.brush, state.models, state.sky);
 
@@ -714,7 +714,7 @@ function drapedPath(points, colour, fallbackZ) {
 
 function updateBrush(game) {
   disposeGroup(state.brush);
-  if (!game) return;
+  if (!game && !(state.tool === 'warp' && state.grab)) return;
   if (state.tool === 'brush') {
     const [x, y, z] = game;
     const mode = $('brushMode').value;
@@ -722,6 +722,10 @@ function updateBrush(game) {
     state.brush.add(drapedFan(x, y, circle(x, y, r), BRUSH_COLOURS[mode], z));
     state.brush.add(drapedLoop(circle(x, y, r), BRUSH_COLOURS[mode], z));
     if (state.stroke && state.stroke.points.length > 1) state.brush.add(drapedPath(state.stroke.points, BRUSH_COLOURS[mode], z));
+    return;
+  }
+  if (state.tool === 'warp') {
+    drawWarp(game);
     return;
   }
   if (state.tool === 'objects' && state.placing && state.sel) {
@@ -751,6 +755,67 @@ function updateBrush(game) {
       parseFloat($('height').value) < 0 ? 0x40c4ff : 0xffeb3b, z));
     state.brush.add(drapedLoop(circle(x, y, m(dims.radius)), 0xffeb3b, z));
     if (shape !== 'bump') state.brush.add(drapedLoop(circle(x, y, m(dims.radius + dims.edge)), 0xffa000, z));
+  }
+}
+
+// ---------------------------------------------------------------- moving a piece of the course
+const WARP_HELP = $('warpInfo').textContent;
+
+function warpDims(moveCm) {
+  const radius = Math.max(0, parseFloat($('warpRadius').value) || 0);
+  const v = parseFloat($('warpEdge').value);
+  const edge = v > 0 ? v : Math.max(40, 2.5 * moveCm / CM);
+  return { radius, edge, squeeze: 1 - 1.5 * (moveCm / CM) / edge };
+}
+
+function groundAt(z) {
+  // Where the pointer ray crosses the horizontal plane at game height z (the grab follows the ground's level).
+  const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -toScene([0, 0, z]).y);
+  const p = raycaster.ray.intersectPlane(plane, new THREE.Vector3());
+  return p ? toGame(p) : null;
+}
+
+function drawWarp(game) {
+  const g = state.grab;
+  const [x, y, z] = g ? [g.x, g.y, g.z] : game;
+  const move = g ? Math.hypot(g.tx - g.x, g.ty - g.y) : 0;
+  const { radius, edge, squeeze } = warpDims(move);
+  const bad = squeeze < 0.35;
+  state.brush.add(drapedFan(x, y, circle(x, y, radius * CM), 0xffeb3b, z));
+  state.brush.add(drapedLoop(circle(x, y, radius * CM), 0xffeb3b, z));
+  state.brush.add(drapedLoop(circle(x, y, (radius + edge) * CM), bad ? 0xff1744 : 0xffa000, z));
+  if (!g || move < 1) return;
+  state.brush.add(drapedLoop(circle(g.tx, g.ty, radius * CM), 0x69f0ae, z));
+  state.brush.add(drapedPath([[x, y], [g.tx, g.ty]], 0xff5252, z));
+  $('warpInfo').textContent = `posun ${(move / CM).toFixed(1)} m, okraj ${edge.toFixed(0)} m, terén na okraji ` +
+    `stlačený na ${Math.max(0, squeeze * 100).toFixed(0)} %` + (bad ? ' – príliš veľa, rozšír okraj' : '');
+  $('warpInfo').classList.toggle('err', bad);
+}
+
+async function commitWarp(g) {
+  const move = Math.hypot(g.tx - g.x, g.ty - g.y);
+  const turn = parseFloat($('warpTurn').value) || 0;
+  const lift = parseFloat($('warpLift').value) || 0;
+  if (move < 30 && !turn && !lift) {
+    log('potiahni terén myšou (alebo nastav otočenie či zdvih a klikni)');
+    updateBrush(null);
+    return;
+  }
+  const { radius, edge } = warpDims(move);
+  const [tx, ty] = move < 30 ? [g.x, g.y] : [g.tx, g.ty];
+  busy(true, 'posúvam kus trate…');
+  try {
+    const res = await api('/api/warp', { code: state.code, x: g.x, y: g.y, tx, ty, radius, edge, turn, lift,
+      force: $('forceWarp').checked });
+    log(res.message, 'ok');
+    await loadCourse(state.code, true);
+  } catch (e) {
+    log(e.message, 'err');
+  } finally {
+    busy(false);
+    $('warpInfo').textContent = WARP_HELP;
+    $('warpInfo').classList.remove('err');
+    updateBrush(null);
   }
 }
 
@@ -870,8 +935,25 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
       renderer.domElement.setPointerCapture(e.pointerId);
     }
   }
+  if (state.tool === 'warp' && e.button === 0 && state.course) {
+    setPointer(e);
+    const p = hitTerrain();
+    if (p) {
+      const g = toGame(p);
+      state.grab = { x: g[0], y: g[1], z: g[2], tx: g[0], ty: g[1] };
+      renderer.domElement.setPointerCapture(e.pointerId);
+      updateBrush(g);
+    }
+  }
 });
 renderer.domElement.addEventListener('pointerup', (e) => {
+  if (state.grab) {
+    const grab = state.grab;
+    state.grab = null;
+    down = null;
+    commitWarp(grab);
+    return;
+  }
   if (state.stroke) {
     const stroke = state.stroke;
     state.stroke = null;
@@ -896,6 +978,12 @@ renderer.domElement.addEventListener('pointerup', (e) => {
 });
 renderer.domElement.addEventListener('pointermove', (e) => {
   lastMove = e;
+  if (state.grab) {
+    setPointer(e);
+    const g = groundAt(state.grab.z);
+    if (g) { state.grab.tx = g[0]; state.grab.ty = g[1]; updateBrush(null); }
+    return;
+  }
   if (!state.stroke) return;
   setPointer(e);
   const p = hitTerrain();
@@ -913,7 +1001,7 @@ function hover() {
   setPointer(e);
   const tip = $('tip');
   let text = null;
-  const obj = !['terrain', 'brush'].includes(state.tool) && !state.placing ? hitObject() : null;
+  const obj = !['terrain', 'brush', 'warp'].includes(state.tool) && !state.placing ? hitObject() : null;
   if (obj) text = obj.n;
   else {
     const p = hitTerrain();
@@ -924,8 +1012,8 @@ function hover() {
         const n = state.line.nearest(g[0], g[1]);
         text += ` · ${Math.round(n.dist / CM)} m od štartu, ${Math.round(n.off / CM)} m od trate`;
       }
-      updateBrush(g);
-    } else updateBrush(null);
+      if (!state.grab) updateBrush(g);
+    } else if (!state.grab) updateBrush(null);
   }
   tip.classList.toggle('hidden', !text);
   if (text) {
@@ -951,8 +1039,8 @@ for (const tab of document.querySelectorAll('.tab')) {
     for (const t of document.querySelectorAll('.tab')) t.classList.toggle('active', t === tab);
     for (const t of document.querySelectorAll('.tool')) t.classList.toggle('hidden', t.id !== `tool-${state.tool}`);
     if (state.tool !== 'objects') select(null);
-    // Sculpting paints with the left button, so the camera moves to the right/middle buttons.
-    controls.mouseButtons = state.tool === 'brush'
+    // Sculpting and grabbing use the left button, so the camera moves to the right/middle buttons.
+    controls.mouseButtons = ['brush', 'warp'].includes(state.tool)
       ? { LEFT: null, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.ROTATE }
       : { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
     updateBrush(null);
